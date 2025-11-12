@@ -152,39 +152,108 @@ export const tipPost = async (req, res) => {
 };
 
   // ADD a comment to a post
+// export const addComment = async (req, res) => {
+//     try {
+//       const { postId } = req.params;
+//       const { content, replyTo } = req.body;
+//       console.log(req.user)
+  
+//       if (!content) {
+//         return res.status(400).json({ success: false, message: "Comment content is required" });
+//       }
+  
+//       const post = await Post.findById(postId);
+//       if (!post) {
+//         return res.status(404).json({ success: false, message: "Post not found" });
+//       }
+  
+//       const newComment = {
+//         postId,
+//         userId: req.user.id,
+//         commentAuthor: req.user.username,
+//         parentAuthor: post.author,
+//         content,
+//         replyTo: replyTo || null
+//       };
+  
+//       post.comments.push(newComment);
+//       await post.save();
+  
+//       res.status(201).json({ success: true, message: "Comment added", post });
+//     } catch (err) {
+//       console.error("AddComment Error:", err.message);
+//       res.status(500).json({ success: false, message: "Server error adding comment" });
+//     }
+//   };
+
 export const addComment = async (req, res) => {
-    try {
-      const { postId } = req.params;
-      const { content, replyTo } = req.body;
-      console.log(req.user)
-  
-      if (!content) {
-        return res.status(400).json({ success: false, message: "Comment content is required" });
-      }
-  
-      const post = await Post.findById(postId);
-      if (!post) {
-        return res.status(404).json({ success: false, message: "Post not found" });
-      }
-  
+  try {
+    const { postId } = req.params;
+    const { content, replyTo } = req.body;
+
+    if (!content) {
+      return res.status(400).json({ success: false, message: "Comment content is required" });
+    }
+
+    const post = await Post.findById(postId);
+    if (!post) {
+      return res.status(404).json({ success: false, message: "Post not found" });
+    }
+
+    // If no replyTo → this is a main parent comment
+    if (!replyTo) {
       const newComment = {
         postId,
         userId: req.user.id,
         commentAuthor: req.user.username,
-        parentAuthor: post.author,
+        parentAuthor: null,        // No parent
         content,
-        replyTo: replyTo || null
+        replyTo: null,
+        children: []
       };
-  
+
       post.comments.push(newComment);
       await post.save();
-  
-      res.status(201).json({ success: true, message: "Comment added", post });
-    } catch (err) {
-      console.error("AddComment Error:", err.message);
-      res.status(500).json({ success: false, message: "Server error adding comment" });
+      return res.status(201).json({ success: true, post });
     }
-  };
+
+    // If replyTo exists → find the main parent comment
+    const parentComment = post.comments.id(replyTo) 
+                       || post.comments.find(c => c.children?.id(replyTo));
+
+    if (!parentComment) {
+      return res.status(404).json({ success: false, message: "Comment being replied to not found" });
+    }
+
+    // Identify the REAL comment being replied to
+    const target =
+      parentComment._id.toString() === replyTo
+        ? parentComment
+        : parentComment.children.id(replyTo);
+
+    const newReply = {
+      postId,
+      userId: req.user.id,
+      commentAuthor: req.user.username,
+      parentAuthor: target?.commentAuthor || null,
+      content,
+      replyTo,
+      children: [] // still allowed if needed later
+    };
+
+    // ALWAYS push replies into the MAIN comment.children array
+    parentComment.children.push(newReply);
+
+    await post.save();
+
+    res.status(201).json({ success: true, post });
+
+  } catch (err) {
+    console.error("AddComment Error:", err.message);
+    res.status(500).json({ success: false, message: "Server error adding comment" });
+  }
+};
+
 
   // TIP a comment
 // TIP a comment
