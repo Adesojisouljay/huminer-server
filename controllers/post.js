@@ -1,5 +1,6 @@
 import Post from "../models/Post.js";
 import User from "../models/User.js";
+import { createNotification } from "../helpers/index.js";
 
 // CREATE a new post
 export const createPost = async (req, res) => {
@@ -89,198 +90,16 @@ export const tipPost = async (req, res) => {
     const { amount, currency } = req.body;
 
     if (!amount || amount <= 0) {
-      return res.status(400).json({ success: false, message: "Tip amount must be greater than 0" });
-    }
-
-    const post = await Post.findById(postId).populate("userId");
-    console.log("post........", post)
-    if (!post) {
-      return res.status(404).json({ success: false, message: "Post not found" });
-    }
-
-    const sender = await User.findById(req.user.id);
-    console.log("sender.......",sender)
-    if (!sender) {
-      return res.status(404).json({ success: false, message: "User not found" });
-    }
-
-    // ✅ Check if user already tipped this post
-    const alreadyTipped = post.tips.some(
-      (tip) => tip.fromUserId.toString() === sender._id.toString()
-    );
-    if (alreadyTipped) {
-      return res.status(400).json({
-        success: false,
-        message: "You have already tipped this post.",
-      });
-    }
-
-    // ✅ Check balance
-    if (sender.accountBalance < amount) {
-      return res.status(400).json({ success: false, message: "Insufficient balance" });
-    }
-
-    // ✅ Deduct from sender immediately
-    sender.accountBalance -= amount;
-    await sender.save();
-
-    // ✅ Add tip to post as "pending"
-    post.tips.push({
-      postId: post._id,
-      fromUserId: sender._id,
-      fromUsername: sender.username,
-      toUserId: post.userId,
-      toUsername: post.author,
-      amount,
-      currency,
-      status: "pending",
-      releaseDate: new Date(Date.now() + 7 * 24 * 60 * 60 * 1000) // 7 days
-    });
-
-    post.totalTips += amount;
-    await post.save();
-
-    res.status(200).json({
-      success: true,
-      message: "Post tipped successfully (pending payout)",
-      post,
-    });
-  } catch (err) {
-    console.error("TipPost Error:", err.message);
-    res.status(500).json({ success: false, message: "Server error tipping post" });
-  }
-};
-
-  // ADD a comment to a post
-// export const addComment = async (req, res) => {
-//     try {
-//       const { postId } = req.params;
-//       const { content, replyTo } = req.body;
-//       console.log(req.user)
-  
-//       if (!content) {
-//         return res.status(400).json({ success: false, message: "Comment content is required" });
-//       }
-  
-//       const post = await Post.findById(postId);
-//       if (!post) {
-//         return res.status(404).json({ success: false, message: "Post not found" });
-//       }
-  
-//       const newComment = {
-//         postId,
-//         userId: req.user.id,
-//         commentAuthor: req.user.username,
-//         parentAuthor: post.author,
-//         content,
-//         replyTo: replyTo || null
-//       };
-  
-//       post.comments.push(newComment);
-//       await post.save();
-  
-//       res.status(201).json({ success: true, message: "Comment added", post });
-//     } catch (err) {
-//       console.error("AddComment Error:", err.message);
-//       res.status(500).json({ success: false, message: "Server error adding comment" });
-//     }
-//   };
-
-export const addComment = async (req, res) => {
-  try {
-    const { postId } = req.params;
-    const { content, replyTo } = req.body;
-
-    if (!content) {
-      return res.status(400).json({ success: false, message: "Comment content is required" });
-    }
-
-    const post = await Post.findById(postId);
-    if (!post) {
-      return res.status(404).json({ success: false, message: "Post not found" });
-    }
-
-    // If no replyTo → this is a main parent comment
-    if (!replyTo) {
-      const newComment = {
-        postId,
-        userId: req.user.id,
-        commentAuthor: req.user.username,
-        parentAuthor: null,        // No parent
-        content,
-        replyTo: null,
-        children: []
-      };
-
-      post.comments.push(newComment);
-      await post.save();
-      return res.status(201).json({ success: true, post });
-    }
-
-    // If replyTo exists → find the main parent comment
-    const parentComment = post.comments.id(replyTo) 
-                       || post.comments.find(c => c.children?.id(replyTo));
-
-    if (!parentComment) {
-      return res.status(404).json({ success: false, message: "Comment being replied to not found" });
-    }
-
-    // Identify the REAL comment being replied to
-    const target =
-      parentComment._id.toString() === replyTo
-        ? parentComment
-        : parentComment.children.id(replyTo);
-
-    const newReply = {
-      postId,
-      userId: req.user.id,
-      commentAuthor: req.user.username,
-      parentAuthor: target?.commentAuthor || null,
-      content,
-      replyTo,
-      children: [] // still allowed if needed later
-    };
-
-    // ALWAYS push replies into the MAIN comment.children array
-    parentComment.children.push(newReply);
-
-    await post.save();
-
-    res.status(201).json({ success: true, post });
-
-  } catch (err) {
-    console.error("AddComment Error:", err.message);
-    res.status(500).json({ success: false, message: "Server error adding comment" });
-  }
-};
-
-
-  // TIP a comment
-// TIP a comment
-export const tipComment = async (req, res) => {
-  try {
-    const { postId, commentId } = req.params;
-    const { amount, currency } = req.body;
-
-    if (!amount || amount <= 0) {
       return res
         .status(400)
         .json({ success: false, message: "Tip amount must be greater than 0" });
     }
 
-    const post = await Post.findById(postId).populate("userId"); // populate post author
+    const post = await Post.findById(postId).populate("userId");
     if (!post) {
       return res
         .status(404)
         .json({ success: false, message: "Post not found" });
-    }
-
-    // Find comment inside post
-    const comment = post.comments.id(commentId);
-    if (!comment) {
-      return res
-        .status(404)
-        .json({ success: false, message: "Comment not found" });
     }
 
     const sender = await User.findById(req.user.id);
@@ -290,70 +109,320 @@ export const tipComment = async (req, res) => {
         .json({ success: false, message: "User not found" });
     }
 
-    // ✅ Prevent tipping your own comment
-    if (comment.userId.toString() === sender._id.toString()) {
-      return res
-        .status(400)
-        .json({ success: false, message: "You cannot tip your own comment" });
-    }
-
-    // ✅ Check if user already tipped this comment
-    const alreadyTipped = comment.tips.some(
+    // 🔍 Prevent tipping the same post twice
+    const alreadyTipped = post.tips?.some(
       (tip) => tip.fromUserId.toString() === sender._id.toString()
     );
+
     if (alreadyTipped) {
       return res.status(400).json({
         success: false,
-        message: "You have already tipped this comment.",
+        message: "You have already tipped this post.",
       });
     }
 
-    // ✅ Check balance
+    // 💰 Check sender balance
     if (sender.accountBalance < amount) {
       return res
         .status(400)
         .json({ success: false, message: "Insufficient balance" });
     }
 
-    // ✅ Deduct from sender immediately
+    // 💸 Deduct from sender
     sender.accountBalance -= amount;
     await sender.save();
 
-    // ✅ Find comment author
-    const commentAuthor = await User.findById(comment.userId);
-    if (!commentAuthor) {
-      return res
-        .status(404)
-        .json({ success: false, message: "Comment author not found" });
-    }
-
-    // ✅ Add tip to comment (pending)
-    comment.tips.push({
+    // 💾 Add tip to post
+    post.tips.push({
       postId: post._id,
       fromUserId: sender._id,
       fromUsername: sender.username,
-      toUserId: comment.userId,
-      toUsername: comment.commentAuthor || commentAuthor.username,
+      toUserId: post.userId,
+      toUsername: post.author,
+      amount,
+      currency,
+      status: "pending",
+      releaseDate: new Date(Date.now() + 7 * 24 * 60 * 60 * 1000),
+    });
+
+    post.totalTips += amount;
+    await post.save();
+
+    // 🛎️ CREATE NOTIFICATION FOR POST OWNER
+    await createNotification({
+      userId: post.userId._id,   // recipient (post author)
+      type: "post-tip",
+      postId: post._id,
+      commentId: null,
+      fromUserId: sender._id,
+      fromUsername: sender.username,
+      message: `${sender.username} tipped your post ₦${amount}`,
+    });
+
+    return res.status(200).json({
+      success: true,
+      message: "Post tipped successfully (pending payout)",
+      post,
+    });
+
+  } catch (err) {
+    console.error("TipPost Error:", err.message);
+    return res
+      .status(500)
+      .json({ success: false, message: "Server error tipping post" });
+  }
+};
+
+export const addComment = async (req, res) => {
+  try {
+    const { postId } = req.params;
+    const { content, replyTo } = req.body;
+
+    if (!content) {
+      return res.status(400).json({
+        success: false,
+        message: "Comment content is required",
+      });
+    }
+
+    const post = await Post.findById(postId);
+    if (!post) {
+      return res.status(404).json({
+        success: false,
+        message: "Post not found",
+      });
+    }
+
+    const sender = req.user; // logged-in user
+    const replyText = content;
+
+    // -------------------------
+    // CASE 1: New Parent Comment
+    // -------------------------
+    if (!replyTo) {
+      const newComment = {
+        postId,
+        userId: sender.id,
+        commentAuthor: sender.username,
+        parentAuthor: null,
+        content,
+        replyTo: null,
+        children: [],
+      };
+
+      post.comments.push(newComment);
+      await post.save();
+
+      // Notify the post owner (if the commenter is not the post owner)
+      if (sender.id !== post.userId.toString()) {
+        await createNotification({
+          userId: post.userId,
+          type: "comment",
+          postId,
+          fromUserId: sender.id,
+          fromUsername: sender.username,
+          message: `${sender.username} commented on your post`,
+        });
+      }
+
+      return res.status(201).json({ success: true, post });
+    }
+
+    // -------------------------
+    // CASE 2: Reply to a Comment
+    // -------------------------
+
+    // Find parent comment (main or nested)
+    const parentComment =
+      post.comments.id(replyTo) ||
+      post.comments.find((c) => c.children.id(replyTo));
+
+    if (!parentComment) {
+      return res.status(404).json({
+        success: false,
+        message: "Comment being replied to not found",
+      });
+    }
+
+    // Identify the exact comment that is being replied to
+    const targetComment =
+      parentComment._id.toString() === replyTo
+        ? parentComment
+        : parentComment.children.id(replyTo);
+
+    const newReply = {
+      postId,
+      userId: sender.id,
+      commentAuthor: sender.username,
+      parentAuthor: targetComment.commentAuthor,
+      content,
+      replyTo,
+      children: [],
+    };
+
+    // ALWAYS push reply into main comment’s children
+    parentComment.children.push(newReply);
+
+    await post.save();
+
+    // ------------------------------
+    // Create notification to the user
+    // ------------------------------
+    if (sender.id !== targetComment.userId.toString()) {
+      await createNotification({
+        userId: targetComment.userId,      // recipient
+        type: "reply",
+        postId,
+        commentId: targetComment._id,
+        fromUserId: sender.id,
+        fromUsername: sender.username,
+        message: `${sender.username} replied to your comment: "${replyText}"`,
+      });
+    }
+
+    res.status(201).json({ success: true, post });
+  } catch (err) {
+    console.error("AddComment Error:", err.message);
+    res.status(500).json({
+      success: false,
+      message: "Server error adding comment",
+    });
+  }
+};
+
+export const tipComment = async (req, res) => {
+  try {
+    const { postId, commentId } = req.params;
+    const { amount, currency } = req.body;
+
+    if (!amount || amount <= 0) {
+      return res.status(400).json({
+        success: false,
+        message: "Tip amount must be greater than 0",
+      });
+    }
+
+    const post = await Post.findById(postId);
+    if (!post) {
+      return res.status(404).json({
+        success: false,
+        message: "Post not found",
+      });
+    }
+
+    let target = null; // comment or reply receiving the tip
+
+    // ---------------------------
+    // 1️⃣ CHECK TOP-LEVEL COMMENT
+    // ---------------------------
+    const top = post.comments.id(commentId);
+    if (top) {
+      target = top;
+    }
+
+    // ---------------------------
+    // 2️⃣ CHECK CHILD COMMENTS
+    // ---------------------------
+    if (!target) {
+      for (const c of post.comments) {
+        const child = c.children.id(commentId);
+        if (child) {
+          target = child;
+          break;
+        }
+      }
+    }
+
+    if (!target) {
+      return res.status(404).json({
+        success: false,
+        message: "Comment or reply not found",
+      });
+    }
+
+    const sender = await User.findById(req.user.id);
+    if (!sender) {
+      return res.status(404).json({
+        success: false,
+        message: "User not found",
+      });
+    }
+
+    // ---------------------------
+    // 3️⃣ PREVENT MULTIPLE TIPS
+    // ---------------------------
+    const alreadyTipped = target.tips?.some(
+      (t) => t.fromUserId.toString() === sender._id.toString()
+    );
+
+    if (alreadyTipped) {
+      return res.status(400).json({
+        success: false,
+        message: "You already tipped this comment",
+      });
+    }
+
+    // ---------------------------
+    // 4️⃣ BALANCE CHECK
+    // ---------------------------
+    if (sender.accountBalance < amount) {
+      return res.status(400).json({
+        success: false,
+        message: "Insufficient balance",
+      });
+    }
+
+    sender.accountBalance -= amount;
+    await sender.save();
+
+    const targetAuthor = await User.findById(target.userId);
+
+    // ---------------------------
+    // 5️⃣ ADD TIP
+    // ---------------------------
+    target.tips.push({
+      postId: post._id,
+      fromUserId: sender._id,
+      fromUsername: sender.username,
+      toUserId: target.userId,
+      toUsername: target.commentAuthor || targetAuthor.username,
       amount,
       currency,
       status: "pending",
       createdAt: new Date(),
     });
 
-    comment.totalTips += amount;
+    target.totalTips += amount;
 
     await post.save();
 
-    res.status(200).json({
+    // ---------------------------
+    // 6️⃣ CREATE NOTIFICATION
+    // ---------------------------
+    if (sender._id.toString() !== target.userId.toString()) {
+      await createNotification({
+        userId: target.userId, // RECEIVER
+        type: "comment-tip",
+        postId: post._id,
+        commentId: target._id,
+        fromUserId: sender._id,
+        fromUsername: sender.username,
+        message: `${sender.username} tipped your comment ${amount} ${currency}`,
+      });
+    }
+
+    return res.status(200).json({
       success: true,
-      message: "Comment tipped successfully (pending payout)",
+      message: "Tip added successfully",
       post,
     });
+
   } catch (err) {
-    console.error("TipComment Error:", err.message);
-    res
-      .status(500)
-      .json({ success: false, message: "Server error tipping comment" });
+    console.error("TipComment Error:", err);
+    return res.status(500).json({
+      success: false,
+      message: "Server error tipping comment",
+    });
   }
 };
 
@@ -378,4 +447,35 @@ export const getRandomPosts = async (req, res) => {
   }
 };
 
-  
+  // GET all posts by a specific username
+export const getPostsByUsername = async (req, res) => {
+  try {
+    const { username } = req.params;
+
+    // 1️⃣ Find the user
+    const user = await User.findOne({ username });
+
+    if (!user) {
+      return res.status(404).json({
+        success: false,
+        message: "User not found",
+      });
+    }
+
+    // 2️⃣ Find the posts by this user
+    const posts = await Post.find({ userId: user._id })
+      .populate("userId", "username email profilePicture")
+      .sort({ createdAt: -1 });
+
+    return res.status(200).json({
+      success: true,
+      posts,
+    });
+  } catch (err) {
+    console.error("getPostsByUsername Error:", err.message);
+    res.status(500).json({
+      success: false,
+      message: "Server error fetching user posts",
+    });
+  }
+};

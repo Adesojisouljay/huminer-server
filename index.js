@@ -6,6 +6,7 @@ import cors from "cors";
 import userRoute from "./routes/userRoute.js"
 import postRoute from "./routes/postRoute.js"
 import songLinkTree from "./routes/songLinkTree.js"
+import notification from "./routes/notification.js"
 
 const app = express();
 const server = http.createServer(app);
@@ -23,6 +24,7 @@ connectDB()
 app.use("/api/users", userRoute);
 app.use("/api/posts", postRoute);
 app.use("/api/song", songLinkTree);
+app.use("/api/notifications", notification);
 
 server.listen(PORT, () => {
   console.log(`Music platfrom is running on port ${PORT}`);
