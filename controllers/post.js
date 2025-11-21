@@ -156,6 +156,7 @@ export const tipPost = async (req, res) => {
       commentId: null,
       fromUserId: sender._id,
       fromUsername: sender.username,
+      fromProfilePicture: sender.profilePicture,
       message: `${sender.username} tipped your post ₦${amount}`,
     });
 
@@ -221,6 +222,7 @@ export const addComment = async (req, res) => {
           postId,
           fromUserId: sender.id,
           fromUsername: sender.username,
+          fromProfilePicture: sender.profilePicture,
           message: `${sender.username} commented on your post`,
         });
       }
@@ -407,6 +409,7 @@ export const tipComment = async (req, res) => {
         commentId: target._id,
         fromUserId: sender._id,
         fromUsername: sender.username,
+        fromProfilePicture: sender.profilePicture,
         message: `${sender.username} tipped your comment ${amount} ${currency}`,
       });
     }

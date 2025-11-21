@@ -1,6 +1,6 @@
 import express from "express";
 import { authMiddleware } from "../middleware/inde.js";
-import { registerUser, loginUser, getUserProfile,getUserByUsername, updateUserProfile, getAllUsers, getRandomUsers, followUser, unfollowUser } from "../controllers/user.js";
+import { registerUser, loginUser, getUserProfile,getUserByUsername, updateUserProfile, getAllUsers, getRandomUsers, followUser, unfollowUser, claimRewards } from "../controllers/user.js";
 
 const router = express.Router();
 
@@ -14,5 +14,6 @@ router.get("/", getAllUsers); // GET /api/users → all users
 router.get("/random/users", getRandomUsers); // GET /api/users/random?limit=5 → random users
 router.put("/follow/:userId", authMiddleware, followUser);
 router.put("/unfollow/:userId", authMiddleware, unfollowUser);
+router.post("/claim-rewards", authMiddleware, claimRewards);
 
 export default router;

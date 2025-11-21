@@ -1,6 +1,7 @@
 import User from "../models/User.js";
 import bcrypt from "bcrypt";
 import jwt from "jsonwebtoken"
+import { createNotification } from "../helpers/index.js";
 
 // Register a new user
 export const registerUser = async (req, res) => {
@@ -205,6 +206,24 @@ export const followUser = async (req, res) => {
 
       await currentUser.save();
       await userToFollow.save();
+
+      console.log("object...", {
+        userId: userToFollow._id,
+        type: "follow",
+        fromUserId: currentUser._id,
+        fromUsername: currentUser.username,
+        message: `${currentUser.username} started following you`
+      })
+
+      createNotification({
+        userId: userToFollow._id,
+        type: "follow",
+        fromUserId: currentUser._id,
+        fromUsername: currentUser.username,
+        fromProfilePicture: currentUser.profilePicture,
+        message: `${currentUser.username} started following you`
+      });
+      
     }
 
     const updatedUser = await User.findById(id).select("-password");
@@ -232,11 +251,56 @@ export const unfollowUser = async (req, res) => {
 
       await currentUser.save();
       await userToUnfollow.save();
+
+      console.log("object...", {
+        userId: userToUnfollow._id,
+        type: "unfollow",
+        fromUserId: currentUser._id,
+        fromUsername: currentUser.username,
+        message: `${currentUser.username} unfollowed you`
+      })
+
+      createNotification({
+        userId: userToUnfollow._id,
+        type: "unfollow",
+        fromUserId: currentUser._id,
+        fromUsername: currentUser.username,
+        fromProfilePicture: currentUser.profilePicture,
+        message: `${currentUser.username} unfollowed you`
+      });
+      
     }
 
     const updatedUser = await User.findById(id).select("-password");
     res.status(200).json({ message: "Unfollowed successfully", updatedUser });
   } catch (error) {
     res.status(500).json({ message: "Server error", error: error.message });
+  }
+};
+
+export const claimRewards = async (req, res) => {
+  try {
+    const user = await User.findById(req.user.id);
+
+    if (user.pendingRewards <= 0) {
+      return res.status(400).json({ message: "No rewards to claim" });
+    }
+
+    user.accountBalance += user.pendingRewards;
+    user.pendingRewards = 0;
+
+    await user.save();
+
+    // Return full user object without password
+    const userObj = user.toObject();
+    delete userObj.password;
+
+    return res.json({
+      message: "Rewards claimed successfully",
+      user: userObj
+    });
+
+  } catch (error) {
+    return res.status(500).json({ message: error.message });
   }
 };
