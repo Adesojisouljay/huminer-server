@@ -56,6 +56,20 @@ const userSchema = new mongoose.Schema({
     }
   ],
 
+  ////Paid out
+  pendingRewards: { type: Number, default: 0 },
+  claimedRewards: { type: Number, default: 0 },
+
+  pendingBreakdown: [
+    {
+      sourceId: mongoose.Schema.Types.ObjectId, // post/comment/reply ID
+      sourceType: { type: String, enum: ["post", "comment", "reply"] },
+      amount: Number,
+      currency: { type: String, enum: ["NGN", "HIVE", "HBD"], default: "NGN" },
+      createdAt: { type: Date, default: Date.now }
+    }
+  ],
+
   // Notifications & Settings
   notifications: [{ type: mongoose.Schema.Types.ObjectId, ref: "Notification" }],
   settings: {
