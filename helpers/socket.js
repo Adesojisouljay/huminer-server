@@ -71,7 +71,48 @@ export const setupSocket = (server) => {
       }
     });
 
+    // inside io.on("connection", socket => { ... })
+// ---------- CALL / WEBRTC SIGNALING ----------
+/**
+ * Caller -> server -> callee
+ * Payloads:
+ *  - callUser: { toUserId, fromUserId, callType, offer }
+ *  - answerCall: { toUserId, fromUserId, answer }
+ *  - iceCandidate: { toUserId, fromUserId, candidate }
+ *  - endCall: { toUserId, fromUserId }
+ */
 
+socket.on("callUser", ({ toUserId, fromUserId, callType, offer }) => {
+    const targetSocketId = onlineUsers.get(toUserId);
+    if (targetSocketId) {
+      io.to(targetSocketId).emit("incomingCall", { fromUserId, callType, offer });
+    } else {
+      // optional: reply to caller that target is offline
+      io.to(socket.id).emit("userOffline", { toUserId });
+    }
+  });
+  
+  socket.on("answerCall", ({ toUserId, fromUserId, answer }) => {
+    const targetSocketId = onlineUsers.get(toUserId); // usually caller
+    if (targetSocketId) {
+      io.to(targetSocketId).emit("callAnswered", { fromUserId, answer });
+    }
+  });
+  
+  socket.on("iceCandidate", ({ toUserId, fromUserId, candidate }) => {
+    const targetSocketId = onlineUsers.get(toUserId);
+    if (targetSocketId) {
+      io.to(targetSocketId).emit("iceCandidate", { fromUserId, candidate });
+    }
+  });
+  
+  socket.on("endCall", ({ toUserId, fromUserId }) => {
+    const targetSocketId = onlineUsers.get(toUserId);
+    if (targetSocketId) {
+      io.to(targetSocketId).emit("callEnded", { fromUserId });
+    }
+  });
+  
     /* --------------------------
          USER DISCONNECTS
     ---------------------------*/
