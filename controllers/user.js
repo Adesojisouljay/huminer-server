@@ -223,7 +223,7 @@ export const followUser = async (req, res) => {
         fromProfilePicture: currentUser.profilePicture,
         message: `${currentUser.username} started following you`
       });
-      
+
     }
 
     const updatedUser = await User.findById(id).select("-password");
@@ -268,7 +268,7 @@ export const unfollowUser = async (req, res) => {
         fromProfilePicture: currentUser.profilePicture,
         message: `${currentUser.username} unfollowed you`
       });
-      
+
     }
 
     const updatedUser = await User.findById(id).select("-password");
@@ -302,5 +302,67 @@ export const claimRewards = async (req, res) => {
 
   } catch (error) {
     return res.status(500).json({ message: error.message });
+  }
+};
+
+// 🟢 NEW: ADD BANK ACCOUNT
+export const addBankAccount = async (req, res) => {
+  try {
+    const { bankName, accountNumber, accountName } = req.body;
+
+    // Validate input
+    if (!bankName || !accountNumber || !accountName) {
+      return res.status(400).json({ message: "All fields are required" });
+    }
+
+    const user = await User.findById(req.user.id);
+    if (!user) return res.status(404).json({ message: "User not found" });
+
+    // Add new bank account
+    user.bankAccounts.push({
+      bankName,
+      accountNumber,
+      accountName,
+      isPrimary: user.bankAccounts.length === 0 // Make primary if it's the first one
+    });
+
+    await user.save();
+
+    res.status(200).json({
+      message: "Bank account added successfully",
+      bankAccounts: user.bankAccounts
+    });
+
+  } catch (error) {
+    res.status(500).json({ message: "Server error", error: error.message });
+  }
+};
+// 🆕 DELETE BANK ACCOUNT
+export const deleteBankAccount = async (req, res) => {
+  try {
+    const { bankId } = req.params;
+
+    const user = await User.findById(req.user.id);
+    if (!user) return res.status(404).json({ message: "User not found" });
+
+    // Filter out the bank account to delete
+    const initialLength = user.bankAccounts.length;
+    user.bankAccounts = user.bankAccounts.filter(
+      (account) => account._id.toString() !== bankId
+    );
+
+    if (user.bankAccounts.length === initialLength) {
+      return res.status(404).json({ message: "Bank account not found" });
+    }
+
+    await user.save();
+
+    res.status(200).json({
+      message: "Bank account deleted successfully",
+      bankAccounts: user.bankAccounts
+    });
+
+  } catch (error) {
+    res.status(500).json({ message: "Server error", error: error.message });
   }
 };

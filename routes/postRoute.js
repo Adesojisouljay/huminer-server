@@ -1,12 +1,14 @@
 import express from "express";
-import { createPost, getPosts, getPostById, deletePost, tipPost, tipComment, addComment, getRandomPosts, getPostsByUsername } from "../controllers/post.js";
+import { createPost, getPosts, getPostById, deletePost, tipPost, tipComment, addComment, getRandomPosts, getPostsByUsername, getFollowingPosts, likePost } from "../controllers/post.js";
 import { authMiddleware } from "../middleware/inde.js";
 
 const router = express.Router();
 
 router.post("/", authMiddleware, createPost); // create
-router.get("/", getPosts); // feed
+router.get("/", getPosts); // feed (all posts)
+router.get("/following", authMiddleware, getFollowingPosts); // 🟢 NEW: Following feed
 router.get("/:id", getPostById); // single post
+router.put("/:id/like", authMiddleware, likePost); // 🟢 NEW: Like post
 router.delete("/:id", authMiddleware, deletePost); // delete
 router.get("/post/:username", getPostsByUsername);
 
