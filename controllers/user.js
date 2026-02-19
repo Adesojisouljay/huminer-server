@@ -196,6 +196,10 @@ export const followUser = async (req, res) => {
     console.log("usertfoll.......", userToFollow, userId, id)
     const currentUser = await User.findById(id);
 
+    if (id === userId) {
+      return res.status(400).json({ message: "You cannot follow yourself" });
+    }
+
     if (!userToFollow) return res.status(404).json({ message: "User not found" });
 
     if (!currentUser.following.includes(userId)) {
