@@ -72,6 +72,8 @@ const postSchema = new mongoose.Schema(
     payoutAt: Date,
     isPaidOut: Boolean,
 
+    likes: [{ type: mongoose.Schema.Types.ObjectId, ref: "User" }], // 🟢 NEW: Likes
+
     comments: [commentSchema]
   },
   { timestamps: true }

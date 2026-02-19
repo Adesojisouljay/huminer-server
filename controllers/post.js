@@ -429,7 +429,7 @@ export const tipComment = async (req, res) => {
   }
 };
 
-  // GET random posts
+// GET random posts
 export const getRandomPosts = async (req, res) => {
   try {
     const limit = parseInt(req.query.limit) || 5;
@@ -450,7 +450,7 @@ export const getRandomPosts = async (req, res) => {
   }
 };
 
-  // GET all posts by a specific username
+// GET all posts by a specific username
 export const getPostsByUsername = async (req, res) => {
   try {
     const { username } = req.params;
@@ -480,5 +480,73 @@ export const getPostsByUsername = async (req, res) => {
       success: false,
       message: "Server error fetching user posts",
     });
+  }
+};
+// GET posts from users the current user follows
+export const getFollowingPosts = async (req, res) => {
+  try {
+    const currentUser = await User.findById(req.user.id);
+    if (!currentUser) return res.status(404).json({ success: false, message: "User not found" });
+
+    // Get list of followed user IDs
+    const followingIds = currentUser.following;
+
+    // Find posts where userId is in the following list
+    const posts = await Post.find({ userId: { $in: followingIds } })
+      .populate("userId", "username email profilePicture")
+      .sort({ createdAt: -1 });
+
+    res.status(200).json({ success: true, posts });
+  } catch (err) {
+    console.error("GetFollowingPosts Error:", err.message);
+    res.status(500).json({ success: false, message: "Server error fetching following posts" });
+  }
+};
+// TOGGLE LIKE POST
+export const likePost = async (req, res) => {
+  try {
+    const { id } = req.params;
+    const userId = req.user.id;
+
+    const post = await Post.findById(id);
+    if (!post) return res.status(404).json({ success: false, message: "Post not found" });
+
+    // Ensure likes exists
+    if (!post.likes) post.likes = [];
+
+    const isLiked = post.likes.some((uid) => uid.toString() === userId.toString());
+
+    if (isLiked) {
+      // Unlike
+      post.likes = post.likes.filter((uid) => uid.toString() !== userId.toString());
+    } else {
+      // Like
+      post.likes.push(userId);
+
+      // Notify post author (if not self)
+      if (post.userId.toString() !== userId.toString()) {
+        try {
+          await createNotification({
+            userId: post.userId,
+            type: "like",
+            postId: post._id,
+            fromUserId: userId,
+            fromUsername: req.user.username,
+            fromProfilePicture: req.user.profilePicture, // ensure this user obj has profilePicture
+            message: `${req.user.username} liked your post`
+          });
+        } catch (notifErr) {
+          console.error("Failed to send notification:", notifErr);
+        }
+      }
+    }
+
+    await post.save();
+
+    res.status(200).json({ success: true, message: isLiked ? "Unliked" : "Liked", likes: post.likes });
+
+  } catch (err) {
+    console.error("LikePost Error:", err.message);
+    res.status(500).json({ success: false, message: "Server error toggling like" });
   }
 };
