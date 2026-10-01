@@ -39,22 +39,35 @@ const userSchema = new mongoose.Schema({
   posts: [{ type: mongoose.Schema.Types.ObjectId, ref: "Post" }],
   likedPosts: [{ type: mongoose.Schema.Types.ObjectId, ref: "Post" }],
   savedPosts: [{ type: mongoose.Schema.Types.ObjectId, ref: "Post" }],
+  rebloggedPosts: [{ type: mongoose.Schema.Types.ObjectId, ref: "Post" }],
   totalLikes: { type: Number, default: 0 },
   totalTipped: { type: Number, default: 0 },
   totalEarned: { type: Number, default: 0 },
   stories: [{ type: mongoose.Schema.Types.ObjectId, ref: "Story" }],
   badges: [String],
 
-  // Bank & Financials
+  // Bank & Financials (Fiat)
   accountBalance: { type: Number, default: 0 },
   bankAccounts: [
     {
       bankName: String,
+      bankCode: String,
       accountNumber: String,
       accountName: String,
+      recipientCode: String,
       isPrimary: { type: Boolean, default: false }
     }
   ],
+
+  // Native Huminer Web3 Wallets (USDT, BTC)
+  web3Wallets: {
+    hasWallet: { type: Boolean, default: false },
+    usdtAddress: { type: String, default: "" },
+    usdtBalance: { type: Number, default: 0 },
+    btcAddress: { type: String, default: "" },
+    btcBalance: { type: Number, default: 0 },
+    createdAt: { type: Date }
+  },
 
   ////Paid out
   pendingRewards: { type: Number, default: 0 },
@@ -82,8 +95,8 @@ const userSchema = new mongoose.Schema({
   lastLogin: { type: Date },
   isActive: { type: Boolean, default: true },
   role: { type: String, enum: ["user", "artist", "admin"], default: "user" },
-  verificationDocs: [String],
-
+  // Push Notification Devices
+  fcmTokens: [{ type: String }],
 }, { timestamps: true });
 
 export default mongoose.model("User", userSchema);

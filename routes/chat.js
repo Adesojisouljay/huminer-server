@@ -1,5 +1,5 @@
 import express from "express";
-import { createChat, getUserChats, sendMessage, getChatMessages, getChatById } from "../controllers/chat.js";
+import { createChat, getUserChats, sendMessage, getChatMessages, getChatById, markChatAsRead } from "../controllers/chat.js";
 
 const router = express.Router();
 
@@ -11,6 +11,9 @@ router.get("/user/:userId", getUserChats); // prefix with /user so it doesn't co
 
 // Send a message
 router.post("/message", sendMessage);
+
+// Mark chat as read
+router.put("/:chatId/read", markChatAsRead);
 
 // Get messages of a chat
 router.get("/:chatId/messages", getChatMessages);

@@ -12,27 +12,43 @@ export const createPost = async (req, res) => {
       return res.status(400).json({ success: false, message: "Title and body are required" });
     }
 
+    // Auto-extract hashtags from body (e.g. #music #huminer #crypto) and merge with tags
+    const bodyMatches = (body.match(/#([\w\u0590-\u05ff\u0600-\u06ff]+)/gi) || []).map(t =>
+      t.replace("#", "").toLowerCase()
+    );
+
+    const explicitTags = Array.isArray(tags)
+      ? tags.map(t => t.replace(/^#/, "").toLowerCase().trim()).filter(Boolean)
+      : [];
+
+    const mergedTags = Array.from(new Set([...bodyMatches, ...explicitTags]));
+
     const newPost = new Post({
       title,
       body,
       media: Array.isArray(media) ? media : [], // must match schema shape
       userId: req.user.id,        // from authMiddleware
       author: req.user.username, // cached for faster queries
-      tags: tags || [],
+      tags: mergedTags,
+      payoutAt: new Date(Date.now() + 7 * 24 * 3600 * 1000),
+      totalTips: 0,
     });
 
     const savedPost = await newPost.save();
     res.status(201).json({ success: true, post: savedPost });
   } catch (err) {
-    console.error("CreatePost Error:", err.message);
-    res.status(500).json({ success: false, message: "Server error creating post" });
+    console.error("CreatePost Error:", err);
+    res.status(500).json({ success: false, message: err.message || "Server error creating post" });
   }
 };
 
-// GET all posts (feed)
+// GET all posts (feed, optional tag filter)
 export const getPosts = async (req, res) => {
   try {
-    const posts = await Post.find()
+    const { tag } = req.query;
+    const query = tag ? { tags: tag.toLowerCase() } : {};
+
+    const posts = await Post.find(query)
       .populate("userId", "username email") // in case you want live user info
       .sort({ createdAt: -1 });
 
@@ -40,6 +56,24 @@ export const getPosts = async (req, res) => {
   } catch (err) {
     console.error("GetPosts Error:", err.message);
     res.status(500).json({ success: false, message: "Server error fetching posts" });
+  }
+};
+
+// GET trending hashtags with post count stats
+export const getTrendingTags = async (req, res) => {
+  try {
+    const stats = await Post.aggregate([
+      { $unwind: "$tags" },
+      { $group: { _id: "$tags", count: { $sum: 1 } } },
+      { $sort: { count: -1 } },
+      { $limit: 15 },
+      { $project: { tag: "$_id", count: 1, _id: 0 } }
+    ]);
+
+    res.status(200).json({ success: true, tags: stats });
+  } catch (err) {
+    console.error("GetTrendingTags Error:", err.message);
+    res.status(500).json({ success: false, message: "Server error fetching hashtags" });
   }
 };
 
@@ -89,13 +123,15 @@ export const tipPost = async (req, res) => {
     const { postId } = req.params;
     const { amount, currency } = req.body;
 
-    if (!amount || amount <= 0) {
+    const tipAmount = Number(amount) || 0;
+    if (tipAmount < 0) {
       return res
         .status(400)
-        .json({ success: false, message: "Tip amount must be greater than 0" });
+        .json({ success: false, message: "Tip amount cannot be negative" });
     }
 
-    const post = await Post.findById(postId).populate("userId");
+    // Find post cleanly
+    const post = await Post.findById(postId);
     if (!post) {
       return res
         .status(404)
@@ -109,68 +145,166 @@ export const tipPost = async (req, res) => {
         .json({ success: false, message: "User not found" });
     }
 
-    // 🔍 Prevent tipping the same post twice
-    const alreadyTipped = post.tips?.some(
-      (tip) => tip.fromUserId.toString() === sender._id.toString()
-    );
+    const tipCurrency = currency ? currency.toUpperCase() : "NGN";
 
-    if (alreadyTipped) {
-      return res.status(400).json({
-        success: false,
-        message: "You have already tipped this post.",
-      });
+    // Resolve post creator: check post.userId first, fallback to author username
+    let postOwner = null;
+    if (post.userId) {
+      postOwner = await User.findById(post.userId);
+    }
+    if (!postOwner && post.author) {
+      postOwner = await User.findOne({ username: post.author });
     }
 
-    // 💰 Check sender balance
-    if (sender.accountBalance < amount) {
-      return res
-        .status(400)
-        .json({ success: false, message: "Insufficient balance" });
+    if (!postOwner) {
+      return res.status(404).json({ success: false, message: "Post creator not found" });
     }
 
-    // 💸 Deduct from sender
-    sender.accountBalance -= amount;
-    await sender.save();
+    console.log(`[Tip Request] Post: ${post._id}, Sender: ${sender.username} (${sender._id}), Creator: ${postOwner.username} (${postOwner._id}), Amount: ${tipAmount} ${tipCurrency}`);
+
+    // ⚡ If crypto tip (USDT / BTC)
+    if (tipAmount > 0 && (tipCurrency === "USDT" || tipCurrency === "BTC")) {
+      const hasWeb3 = postOwner.web3Wallets?.hasWallet;
+      if (!hasWeb3) {
+        // Notify the recipient to create their wallet
+        await createNotification({
+          userId: postOwner._id,
+          type: "crypto-wallet-alert",
+          postId: post._id,
+          fromUserId: sender._id,
+          fromUsername: sender.username,
+          fromProfilePicture: sender.profilePicture,
+          message: `Hurry, go create your Web3 wallet! ${sender.username} tried to tip you ${tipAmount} ${tipCurrency}.`,
+        });
+
+        return res.status(400).json({
+          success: false,
+          needsWeb3Wallet: true,
+          message: `@${postOwner.username} has not created a Web3 wallet on Huminer yet. We've notified them to create one so they can receive ${tipCurrency}!`,
+        });
+      }
+
+      // Check sender crypto balance
+      const senderCryptoBalance =
+        tipCurrency === "USDT"
+          ? sender.web3Wallets?.usdtBalance || 0
+          : sender.web3Wallets?.btcBalance || 0;
+
+      if (senderCryptoBalance < tipAmount) {
+        return res.status(400).json({
+          success: false,
+          message: `Insufficient ${tipCurrency} balance in your Huminer Web3 wallet.`,
+        });
+      }
+
+      // Deduct from sender crypto vault and credit creator
+      if (tipCurrency === "USDT") {
+        sender.web3Wallets.usdtBalance -= tipAmount;
+        postOwner.web3Wallets.usdtBalance = (postOwner.web3Wallets.usdtBalance || 0) + tipAmount;
+      } else {
+        sender.web3Wallets.btcBalance -= tipAmount;
+        postOwner.web3Wallets.btcBalance = (postOwner.web3Wallets.btcBalance || 0) + tipAmount;
+      }
+
+      await sender.save();
+      await postOwner.save();
+    } else if (tipAmount > 0) {
+      // 💰 Fiat Naira Tip: Check sender balance
+      if (sender.accountBalance < tipAmount) {
+        return res
+          .status(400)
+          .json({ success: false, message: "Insufficient Naira balance" });
+      }
+
+      const isSelfTip = sender._id.toString() === postOwner._id.toString();
+
+      if (isSelfTip) {
+        // If tipping own post, no net change to accountBalance
+        sender.totalTipped = (sender.totalTipped || 0) + tipAmount;
+        sender.totalEarned = (sender.totalEarned || 0) + tipAmount;
+        await sender.save();
+      } else {
+        // 💸 Deduct from sender
+        sender.accountBalance -= tipAmount;
+        sender.totalTipped = (sender.totalTipped || 0) + tipAmount;
+        await sender.save();
+
+        // 💰 Atomically credit creator in database
+        const updatedRecipient = await User.findByIdAndUpdate(
+          postOwner._id,
+          {
+            $inc: {
+              accountBalance: tipAmount,
+              totalEarned: tipAmount,
+            },
+          },
+          { new: true }
+        );
+        console.log(`[Tip Credit] User ${postOwner.username} (${postOwner._id}) credited +₦${tipAmount}. New balance: ₦${updatedRecipient?.accountBalance}`);
+      }
+    }
 
     // 💾 Add tip to post
     post.tips.push({
       postId: post._id,
       fromUserId: sender._id,
       fromUsername: sender.username,
-      toUserId: post.userId,
-      toUsername: post.author,
-      amount,
-      currency,
-      status: "pending",
-      releaseDate: new Date(Date.now() + 7 * 24 * 60 * 60 * 1000),
+      toUserId: postOwner._id,
+      toUsername: postOwner.username || post.author,
+      amount: tipAmount,
+      currency: tipCurrency,
+      status: "completed",
+      releaseDate: new Date(),
     });
 
-    post.totalTips += amount;
+    // Also register sender in post.likes if not already present
+    if (!post.likes) post.likes = [];
+    if (!post.likes.some((id) => id.toString() === sender._id.toString())) {
+      post.likes.push(sender._id);
+    }
+
+    post.totalTips = (post.totalTips || 0) + tipAmount;
     await post.save();
 
     // 🛎️ CREATE NOTIFICATION FOR POST OWNER
-    await createNotification({
-      userId: post.userId._id,   // recipient (post author)
-      type: "post-tip",
-      postId: post._id,
-      commentId: null,
-      fromUserId: sender._id,
-      fromUsername: sender.username,
-      fromProfilePicture: sender.profilePicture,
-      message: `${sender.username} tipped your post ₦${amount}`,
-    });
+    try {
+      const displayAmount = tipCurrency === "NGN" ? `₦${tipAmount.toLocaleString()}` : `${tipAmount} ${tipCurrency}`;
+      const notifMessage = tipAmount > 0
+        ? `${sender.username} tipped your post ${displayAmount} (credited to your ${tipCurrency === "NGN" ? "wallet" : "Huminer Web3 vault"})`
+        : `${sender.username} liked your post`;
 
+      const recipientId = postOwner._id;
+      if (recipientId && sender._id.toString() !== recipientId.toString()) {
+        const notifDoc = await createNotification({
+          userId: recipientId,   // recipient (post author)
+          type: tipAmount > 0 ? "post-tip" : "like",
+          postId: post._id,
+          commentId: null,
+          fromUserId: sender._id,
+          fromUsername: sender.username,
+          fromProfilePicture: sender.profilePicture || "",
+          message: notifMessage,
+        });
+        console.log(`[Notification Success] Created notification ${notifDoc?._id} for recipient ${recipientId}`);
+      }
+    } catch (notifErr) {
+      console.error("[Notification Error in tipPost]:", notifErr);
+    }
+
+    const displayAmount = tipCurrency === "NGN" ? `₦${tipAmount.toLocaleString()}` : `${tipAmount} ${tipCurrency}`;
     return res.status(200).json({
       success: true,
-      message: "Post tipped successfully (pending payout)",
+      message: tipAmount > 0 ? `Tipped ${displayAmount} successfully!` : "Post liked successfully!",
       post,
+      newSenderBalance: sender.accountBalance,
+      currency: tipCurrency,
     });
 
   } catch (err) {
-    console.error("TipPost Error:", err.message);
+    console.error("TipPost Error:", err);
     return res
       .status(500)
-      .json({ success: false, message: "Server error tipping post" });
+      .json({ success: false, message: err.message || "Server error tipping post" });
   }
 };
 
@@ -374,10 +508,23 @@ export const tipComment = async (req, res) => {
       });
     }
 
-    sender.accountBalance -= amount;
-    await sender.save();
+    const isSelfCommentTip = sender._id.toString() === target.userId.toString();
+    if (isSelfCommentTip) {
+      sender.totalTipped = (sender.totalTipped || 0) + amount;
+      sender.totalEarned = (sender.totalEarned || 0) + amount;
+      await sender.save();
+    } else {
+      sender.accountBalance -= amount;
+      sender.totalTipped = (sender.totalTipped || 0) + amount;
+      await sender.save();
 
-    const targetAuthor = await User.findById(target.userId);
+      await User.findByIdAndUpdate(target.userId, {
+        $inc: {
+          accountBalance: amount,
+          totalEarned: amount,
+        },
+      });
+    }
 
     // ---------------------------
     // 5️⃣ ADD TIP
@@ -387,14 +534,14 @@ export const tipComment = async (req, res) => {
       fromUserId: sender._id,
       fromUsername: sender.username,
       toUserId: target.userId,
-      toUsername: target.commentAuthor || targetAuthor.username,
+      toUsername: target.commentAuthor || (targetAuthor ? targetAuthor.username : "Author"),
       amount,
-      currency,
-      status: "pending",
+      currency: currency || "NGN",
+      status: "completed",
       createdAt: new Date(),
     });
 
-    target.totalTips += amount;
+    target.totalTips = (target.totalTips || 0) + amount;
 
     await post.save();
 
@@ -410,14 +557,15 @@ export const tipComment = async (req, res) => {
         fromUserId: sender._id,
         fromUsername: sender.username,
         fromProfilePicture: sender.profilePicture,
-        message: `${sender.username} tipped your comment ${amount} ${currency}`,
+        message: `${sender.username} tipped your comment ₦${amount.toLocaleString()} (credited to your wallet)`,
       });
     }
 
     return res.status(200).json({
       success: true,
-      message: "Tip added successfully",
+      message: `Comment tipped ₦${amount.toLocaleString()} successfully!`,
       post,
+      newSenderBalance: sender.accountBalance,
     });
 
   } catch (err) {
@@ -548,5 +696,125 @@ export const likePost = async (req, res) => {
   } catch (err) {
     console.error("LikePost Error:", err.message);
     res.status(500).json({ success: false, message: "Server error toggling like" });
+  }
+};
+
+// TOGGLE REBLOG / RESHARE POST
+export const reblogPost = async (req, res) => {
+  try {
+    const { id } = req.params;
+    const userId = req.user.id;
+
+    const post = await Post.findById(id);
+    if (!post) return res.status(404).json({ success: false, message: "Post not found" });
+
+    if (!post.reblogs) post.reblogs = [];
+
+    const isReblogged = post.reblogs.some((uid) => uid.toString() === userId.toString());
+
+    if (isReblogged) {
+      post.reblogs = post.reblogs.filter((uid) => uid.toString() !== userId.toString());
+      await User.findByIdAndUpdate(userId, { $pull: { rebloggedPosts: post._id } });
+    } else {
+      post.reblogs.push(userId);
+      await User.findByIdAndUpdate(userId, { $addToSet: { rebloggedPosts: post._id } });
+
+      // Notify post author (if not self)
+      if (post.userId.toString() !== userId.toString()) {
+        try {
+          await createNotification({
+            userId: post.userId,
+            type: "reblog",
+            postId: post._id,
+            fromUserId: userId,
+            fromUsername: req.user.username,
+            fromProfilePicture: req.user.profilePicture,
+            message: `${req.user.username} reblogged your post`
+          });
+        } catch (notifErr) {
+          console.error("Failed to send reblog notification:", notifErr);
+        }
+      }
+    }
+
+    await post.save();
+
+    res.status(200).json({
+      success: true,
+      message: isReblogged ? "Removed reblog" : "Reblogged post",
+      reblogs: post.reblogs
+    });
+  } catch (err) {
+    console.error("ReblogPost Error:", err.message);
+    res.status(500).json({ success: false, message: "Server error toggling reblog" });
+  }
+};
+
+// TOGGLE SAVE / BOOKMARK POST
+export const savePost = async (req, res) => {
+  try {
+    const { id } = req.params;
+    const userId = req.user.id;
+
+    const post = await Post.findById(id);
+    if (!post) return res.status(404).json({ success: false, message: "Post not found" });
+
+    if (!post.saves) post.saves = [];
+
+    const isSaved = post.saves.some((uid) => uid.toString() === userId.toString());
+
+    if (isSaved) {
+      post.saves = post.saves.filter((uid) => uid.toString() !== userId.toString());
+      await User.findByIdAndUpdate(userId, { $pull: { savedPosts: post._id } });
+    } else {
+      post.saves.push(userId);
+      await User.findByIdAndUpdate(userId, { $addToSet: { savedPosts: post._id } });
+    }
+
+    await post.save();
+
+    res.status(200).json({
+      success: true,
+      message: isSaved ? "Post unsaved" : "Post saved",
+      saves: post.saves
+    });
+  } catch (err) {
+    console.error("SavePost Error:", err.message);
+    res.status(500).json({ success: false, message: "Server error toggling save" });
+  }
+};
+
+// GET USER'S REBLOGGED POSTS
+export const getRebloggedPosts = async (req, res) => {
+  try {
+    const { username } = req.params;
+    const user = await User.findOne({ username }).populate({
+      path: "rebloggedPosts",
+      populate: { path: "userId", select: "username email profilePicture" }
+    });
+
+    if (!user) return res.status(404).json({ success: false, message: "User not found" });
+
+    res.status(200).json({ success: true, posts: user.rebloggedPosts || [] });
+  } catch (err) {
+    console.error("GetRebloggedPosts Error:", err.message);
+    res.status(500).json({ success: false, message: "Server error fetching reblogged posts" });
+  }
+};
+
+// GET USER'S SAVED POSTS (Private to active user)
+export const getSavedPosts = async (req, res) => {
+  try {
+    const user = await User.findById(req.user.id).populate({
+      path: "savedPosts",
+      populate: { path: "userId", select: "username email profilePicture" }
+    });
+
+    if (!user) return res.status(404).json({ success: false, message: "User not found" });
+
+    res.status(200).json({ success: true, posts: user.savedPosts || [] });
+  } catch (err) {
+    console.error("GetSavedPosts Error:", err.message);
+    res.status(500).json({ success: false, message: "Server error fetching saved posts" });
   }
 };

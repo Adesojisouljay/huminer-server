@@ -1,4 +1,5 @@
 import Notification from "../models/Notification.js";
+import { emitNotificationToUser } from "./socket.js";
 
 export const createNotification = async ({
   userId,
@@ -21,6 +22,13 @@ export const createNotification = async ({
       fromProfilePicture,
       message,
     });
+
+    // Real-time instant delivery via Socket.io
+    try {
+      emitNotificationToUser(userId, notification);
+    } catch (sockErr) {
+      console.warn("Socket notification emit error:", sockErr);
+    }
 
     return notification;
   } catch (err) {
