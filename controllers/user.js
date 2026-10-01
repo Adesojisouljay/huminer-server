@@ -9,13 +9,23 @@ export const registerUser = async (req, res) => {
     const { username, email, password, fullName } = req.body;
     console.log(req.body)
 
+    const cleanUsername = username?.trim().toLowerCase();
+    const cleanEmail = email?.trim().toLowerCase();
+
     // Check required fields
-    if (!username || !email || !password) {
+    if (!cleanUsername || !cleanEmail || !password) {
       return res.status(400).json({ message: "Username, email and password are required." });
     }
 
     // Check if user already exists
-    const existingUser = await User.findOne({ $or: [{ username }, { email }] });
+    const existingUser = await User.findOne({
+      $or: [
+        { username: cleanUsername },
+        { email: cleanEmail },
+        { username: { $regex: new RegExp(`^${cleanUsername}$`, "i") } },
+        { email: { $regex: new RegExp(`^${cleanEmail}$`, "i") } }
+      ]
+    });
     if (existingUser) {
       return res.status(400).json({ message: "Username or email already taken." });
     }
@@ -26,10 +36,10 @@ export const registerUser = async (req, res) => {
 
     // Create user
     const newUser = await User.create({
-      username,
-      email,
+      username: cleanUsername,
+      email: cleanEmail,
       password: hashedPassword,
-      fullName,
+      fullName: fullName?.trim(),
     });
 
     // Respond without sending password
@@ -44,14 +54,23 @@ export const registerUser = async (req, res) => {
 export const loginUser = async (req, res) => {
   try {
     const { emailOrUsername, password } = req.body;
+    console.log("Login attempt received for:", emailOrUsername);
 
     if (!emailOrUsername || !password) {
       return res.status(400).json({ message: "Email/Username and password are required." });
     }
 
-    // Find user by email or username
+    const trimmedInput = emailOrUsername.trim();
+    const lowerInput = trimmedInput.toLowerCase();
+
+    // Find user by email or username (case-insensitive)
     const user = await User.findOne({
-      $or: [{ email: emailOrUsername }, { username: emailOrUsername }]
+      $or: [
+        { email: lowerInput },
+        { username: lowerInput },
+        { email: { $regex: new RegExp(`^${trimmedInput.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}$`, "i") } },
+        { username: { $regex: new RegExp(`^${trimmedInput.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}$`, "i") } }
+      ]
     });
 
     if (!user) {
@@ -312,7 +331,7 @@ export const claimRewards = async (req, res) => {
 // 🟢 NEW: ADD BANK ACCOUNT
 export const addBankAccount = async (req, res) => {
   try {
-    const { bankName, accountNumber, accountName } = req.body;
+    const { bankName, bankCode, accountNumber, accountName } = req.body;
 
     // Validate input
     if (!bankName || !accountNumber || !accountName) {
@@ -322,11 +341,36 @@ export const addBankAccount = async (req, res) => {
     const user = await User.findById(req.user.id);
     if (!user) return res.status(404).json({ message: "User not found" });
 
+    let recipientCode = "";
+    if (bankCode) {
+      try {
+        const secretKey = process.env.PAYSTACK_SECRET_KEY;
+        const recipientRes = await axios.post(
+          "https://api.paystack.co/transferrecipient",
+          {
+            type: "nuban",
+            name: accountName,
+            account_number: accountNumber,
+            bank_code: bankCode,
+            currency: "NGN"
+          },
+          { headers: { Authorization: `Bearer ${secretKey}` } }
+        );
+        if (recipientRes.data?.status && recipientRes.data?.data?.recipient_code) {
+          recipientCode = recipientRes.data.data.recipient_code;
+        }
+      } catch (err) {
+        console.warn("Paystack recipient creation notice:", err.response?.data || err.message);
+      }
+    }
+
     // Add new bank account
     user.bankAccounts.push({
       bankName,
+      bankCode: bankCode || "",
       accountNumber,
       accountName,
+      recipientCode: recipientCode || "",
       isPrimary: user.bankAccounts.length === 0 // Make primary if it's the first one
     });
 

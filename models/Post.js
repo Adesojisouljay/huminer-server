@@ -7,8 +7,9 @@ const tipSchema = new mongoose.Schema({
   toUserId: mongoose.Schema.Types.ObjectId,
   toUsername: String,
   amount: Number,
-  currency: { type: String, enum: ["NGN", "HIVE", "HBD"] },
-  status: { type: String, enum: ["pending", "released"], default: "pending" },
+  currency: { type: String, enum: ["NGN", "USDT", "BTC", "HIVE", "HBD"], default: "NGN" },
+  status: { type: String, enum: ["pending", "completed", "released"], default: "completed" },
+  releaseDate: { type: Date, default: Date.now },
   createdAt: { type: Date, default: Date.now }
 });
 
@@ -63,7 +64,7 @@ const postSchema = new mongoose.Schema(
       }
     ],
 
-    userId: mongoose.Schema.Types.ObjectId,
+    userId: { type: mongoose.Schema.Types.ObjectId, ref: "User" },
     author: String,
     tags: [String],
 
@@ -72,7 +73,9 @@ const postSchema = new mongoose.Schema(
     payoutAt: Date,
     isPaidOut: Boolean,
 
-    likes: [{ type: mongoose.Schema.Types.ObjectId, ref: "User" }], // 🟢 NEW: Likes
+    likes: [{ type: mongoose.Schema.Types.ObjectId, ref: "User" }], // 🟢 Likes
+    reblogs: [{ type: mongoose.Schema.Types.ObjectId, ref: "User" }], // 🔁 Reblogs / Reshares
+    saves: [{ type: mongoose.Schema.Types.ObjectId, ref: "User" }], // 🔖 Saved / Bookmarked
 
     comments: [commentSchema]
   },

@@ -17,6 +17,8 @@ const notificationSchema = new mongoose.Schema(
         "reply",
         "comment-tip",
         "post-tip",
+        "crypto-wallet-alert",
+        "like",
         "login",
         "follow",
         "unfollow"
