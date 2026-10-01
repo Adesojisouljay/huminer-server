@@ -61,7 +61,8 @@ export const initializeDeposit = async (req, res) => {
             if (origin && !origin.includes("localhost:3000")) {
                 safeCallbackUrl = `${origin.replace(/\/$/, "")}/wallet`;
             } else {
-                safeCallbackUrl = "https://subsequently-above-newfoundland-pic.trycloudflare.com/wallet";
+                const clientUrl = process.env.CLIENT_PROD_URL || "https://huminer.adesojisouljay.com";
+                safeCallbackUrl = `${clientUrl}/wallet`;
             }
         }
 
@@ -173,7 +174,7 @@ export const handleWalletCallback = async (req, res) => {
 
     // If Web browser (not native mobile app), redirect directly back to the Web application!
     if (!isMobileApp) {
-        const clientUrl = process.env.CLIENT_DEV_URL || "http://localhost:3000";
+        const clientUrl = process.env.CLIENT_PROD_URL || process.env.CLIENT_DEV_URL || "http://localhost:3000";
         return res.redirect(`${clientUrl}/wallet?reference=${reference || ""}`);
     }
 
