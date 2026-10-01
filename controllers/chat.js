@@ -1,5 +1,6 @@
 import Chat from "../models/Chat.js";
 import User from "../models/User.js";
+import CallLog from "../models/CallLog.js";
 import { emitChatMessage } from "../helpers/socket.js";
 
 // Create a new chat between users
@@ -161,5 +162,54 @@ export const getChatById = async (req, res) => {
   } catch (err) {
     console.error(err);
     res.status(500).json({ message: "Server error" });
+  }
+};
+
+// Get call history for a user
+export const getUserCallLogs = async (req, res) => {
+  try {
+    const { userId } = req.params;
+    if (!userId) {
+      return res.status(400).json({ message: "User ID required" });
+    }
+
+    const calls = await CallLog.find({
+      $or: [{ caller: userId }, { callee: userId }],
+    })
+      .populate("caller", "username profilePicture")
+      .populate("callee", "username profilePicture")
+      .sort({ createdAt: -1 })
+      .limit(100);
+
+    res.json({ calls });
+  } catch (err) {
+    console.error("getUserCallLogs error:", err);
+    res.status(500).json({ message: "Server error fetching call logs" });
+  }
+};
+
+// Delete a single call log
+export const deleteCallLog = async (req, res) => {
+  try {
+    const { callId } = req.params;
+    await CallLog.findByIdAndDelete(callId);
+    res.json({ message: "Call log deleted successfully" });
+  } catch (err) {
+    console.error("deleteCallLog error:", err);
+    res.status(500).json({ message: "Server error deleting call log" });
+  }
+};
+
+// Clear all call logs for a user
+export const clearUserCallLogs = async (req, res) => {
+  try {
+    const { userId } = req.params;
+    await CallLog.deleteMany({
+      $or: [{ caller: userId }, { callee: userId }],
+    });
+    res.json({ message: "All call logs cleared" });
+  } catch (err) {
+    console.error("clearUserCallLogs error:", err);
+    res.status(500).json({ message: "Server error clearing call logs" });
   }
 };

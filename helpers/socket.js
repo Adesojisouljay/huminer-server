@@ -1,11 +1,14 @@
 import { Server } from "socket.io";
 import Chat from "../models/Chat.js";
 import User from "../models/User.js";
+import CallLog from "../models/CallLog.js";
 import { sendIncomingCallPush } from "./pushService.js";
 
 let io;
 const onlineUsers = new Map(); 
 // structure: userId -> socketId
+const activeCalls = new Map();
+// structure: "user1:user2" -> { logId, callerId, calleeId, callType, startTime, connectedTime, answered }
 
 export const setupSocket = (server) => {
   io = new Server(server, {
@@ -158,12 +161,37 @@ export const setupSocket = (server) => {
  *  - endCall: { toUserId, fromUserId }
  */
 
-  socket.on("callUser", ({ toUserId, fromUserId, callType, offer, fromUsername, fromProfilePicture }) => {
+  socket.on("callUser", async ({ toUserId, fromUserId, callType, offer, fromUsername, fromProfilePicture }) => {
     const targetUid = toUserId?.toString();
     const fromUid = fromUserId?.toString();
     console.log(`[Call] callUser from ${fromUid} (@${fromUsername}) to ${targetUid} (${callType})`);
 
+    let logEntry = null;
+    try {
+      logEntry = await CallLog.create({
+        caller: fromUid,
+        callee: targetUid,
+        callType: callType || "audio",
+        status: "missed",
+        startedAt: new Date(),
+      });
+    } catch (err) {
+      console.error("Failed to create CallLog:", err);
+    }
+
+    const callKey = [fromUid, targetUid].sort().join(":");
+    activeCalls.set(callKey, {
+      logId: logEntry?._id,
+      callerId: fromUid,
+      calleeId: targetUid,
+      callType: callType || "audio",
+      startTime: Date.now(),
+      connectedTime: null,
+      answered: false,
+    });
+
     const payload = {
+      callId: logEntry?._id,
       fromUserId: fromUid,
       callType,
       offer,
@@ -203,10 +231,24 @@ export const setupSocket = (server) => {
     }
   });
 
-  socket.on("answerCall", ({ toUserId, fromUserId, answer }) => {
+  socket.on("answerCall", async ({ toUserId, fromUserId, answer }) => {
     const targetUid = toUserId?.toString();
     const fromUid = fromUserId?.toString();
     console.log(`[Call] answerCall from ${fromUid} to ${targetUid}`);
+
+    const callKey = [fromUid, targetUid].sort().join(":");
+    const call = activeCalls.get(callKey);
+    if (call) {
+      call.answered = true;
+      call.connectedTime = Date.now();
+      if (call.logId) {
+        try {
+          await CallLog.findByIdAndUpdate(call.logId, { status: "answered" });
+        } catch (e) {
+          console.error("Failed to update call status to answered:", e);
+        }
+      }
+    }
 
     io.to(`user:${targetUid}`).emit("callAnswered", { fromUserId: fromUid, answer });
     const targetSocketId = onlineUsers.get(targetUid);
@@ -226,10 +268,45 @@ export const setupSocket = (server) => {
     }
   });
 
-  socket.on("endCall", ({ toUserId, fromUserId }) => {
+  socket.on("endCall", async ({ toUserId, fromUserId }) => {
     const targetUid = toUserId?.toString();
     const fromUid = fromUserId?.toString();
     console.log(`[Call] endCall between ${fromUid} and ${targetUid}`);
+
+    const callKey = [fromUid, targetUid].sort().join(":");
+    const call = activeCalls.get(callKey);
+    if (call) {
+      const isAnswered = call.answered && call.connectedTime;
+      const duration = isAnswered ? Math.max(1, Math.round((Date.now() - call.connectedTime) / 1000)) : 0;
+      let status = "missed";
+      if (isAnswered) {
+        status = "answered";
+      } else if (fromUid === call.calleeId) {
+        status = "rejected";
+      } else {
+        status = "missed";
+      }
+
+      if (call.logId) {
+        try {
+          const updatedLog = await CallLog.findByIdAndUpdate(
+            call.logId,
+            { status, endedAt: new Date(), duration },
+            { new: true }
+          )
+            .populate("caller", "username profilePicture")
+            .populate("callee", "username profilePicture");
+
+          if (updatedLog) {
+            io.to(`user:${call.callerId}`).emit("callLogUpdated", updatedLog);
+            io.to(`user:${call.calleeId}`).emit("callLogUpdated", updatedLog);
+          }
+        } catch (e) {
+          console.error("Failed to finalize CallLog on endCall:", e);
+        }
+      }
+      activeCalls.delete(callKey);
+    }
 
     io.to(`user:${targetUid}`).emit("callEnded", { fromUserId: fromUid });
     const targetSocketId = onlineUsers.get(targetUid);
@@ -241,8 +318,42 @@ export const setupSocket = (server) => {
     /* --------------------------
          USER DISCONNECTS
     ---------------------------*/
-    socket.on("disconnect", () => {
+    socket.on("disconnect", async () => {
       console.log("Client disconnected: " + socket.id);
+
+      // Clean up any active call for this socket
+      if (socket.userId) {
+        for (const [key, call] of activeCalls.entries()) {
+          if (call.callerId === socket.userId || call.calleeId === socket.userId) {
+            const otherUid = call.callerId === socket.userId ? call.calleeId : call.callerId;
+            io.to(`user:${otherUid}`).emit("callEnded", { fromUserId: socket.userId });
+
+            const isAnswered = call.answered && call.connectedTime;
+            const duration = isAnswered ? Math.max(1, Math.round((Date.now() - call.connectedTime) / 1000)) : 0;
+            const status = isAnswered ? "answered" : "missed";
+
+            if (call.logId) {
+              try {
+                const updatedLog = await CallLog.findByIdAndUpdate(
+                  call.logId,
+                  { status, endedAt: new Date(), duration },
+                  { new: true }
+                )
+                  .populate("caller", "username profilePicture")
+                  .populate("callee", "username profilePicture");
+
+                if (updatedLog) {
+                  io.to(`user:${call.callerId}`).emit("callLogUpdated", updatedLog);
+                  io.to(`user:${call.calleeId}`).emit("callLogUpdated", updatedLog);
+                }
+              } catch (e) {
+                console.error("Error finalizing disconnected call log:", e);
+              }
+            }
+            activeCalls.delete(key);
+          }
+        }
+      }
 
       // Remove user from online list
       for (const [userId, sockId] of onlineUsers.entries()) {
