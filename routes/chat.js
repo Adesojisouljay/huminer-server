@@ -1,7 +1,22 @@
 import express from "express";
-import { createChat, getUserChats, sendMessage, getChatMessages, getChatById, markChatAsRead } from "../controllers/chat.js";
+import {
+  createChat,
+  getUserChats,
+  sendMessage,
+  getChatMessages,
+  getChatById,
+  markChatAsRead,
+  getUserCallLogs,
+  deleteCallLog,
+  clearUserCallLogs,
+} from "../controllers/chat.js";
 
 const router = express.Router();
+
+// Call logs
+router.get("/calls/user/:userId", getUserCallLogs);
+router.delete("/calls/:callId", deleteCallLog);
+router.delete("/calls/user/:userId/clear", clearUserCallLogs);
 
 // Create a new chat
 router.post("/", createChat);
