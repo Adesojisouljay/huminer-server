@@ -3,6 +3,12 @@ import mongoose from "mongoose";
 const messageSchema = new mongoose.Schema({
   sender: { type: mongoose.Schema.Types.ObjectId, ref: "User", required: true },
   text: { type: String, required: true },
+  replyTo: {
+    messageId: { type: mongoose.Schema.Types.ObjectId },
+    text: { type: String },
+    senderName: { type: String },
+    senderId: { type: mongoose.Schema.Types.ObjectId, ref: "User" },
+  },
   deliveredTo: [{ type: mongoose.Schema.Types.ObjectId, ref: "User" }],
   readBy: [{ type: mongoose.Schema.Types.ObjectId, ref: "User" }],
   createdAt: { type: Date, default: Date.now }

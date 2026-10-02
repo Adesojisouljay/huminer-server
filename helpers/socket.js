@@ -56,7 +56,7 @@ export const setupSocket = (server) => {
     /* --------------------------
          SEND MESSAGE
     ---------------------------*/
-    socket.on("sendMessage", async ({ chatId, senderId, text }) => {
+    socket.on("sendMessage", async ({ chatId, senderId, text, replyTo }) => {
       try {
         const chat = await Chat.findById(chatId);
         if (!chat) return;
@@ -75,6 +75,7 @@ export const setupSocket = (server) => {
         const newMessage = {
           sender: senderId,
           text,
+          replyTo: replyTo || undefined,
           deliveredTo: initialDelivered,
           readBy: [senderId],
         };

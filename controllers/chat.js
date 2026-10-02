@@ -62,7 +62,7 @@ export const getUserChats = async (req, res) => {
 // Send a message in a chat
 export const sendMessage = async (req, res) => {
   try {
-    const { chatId, senderId, text } = req.body;
+    const { chatId, senderId, text, replyTo } = req.body;
 
     if (!chatId || !senderId || !text) {
       return res.status(400).json({ message: "chatId, senderId and text are required" });
@@ -71,7 +71,13 @@ export const sendMessage = async (req, res) => {
     const chat = await Chat.findById(chatId);
     if (!chat) return res.status(404).json({ message: "Chat not found" });
 
-    const newMessage = { sender: senderId, text, readBy: [senderId], deliveredTo: [senderId] };
+    const newMessage = {
+      sender: senderId,
+      text,
+      replyTo: replyTo || undefined,
+      readBy: [senderId],
+      deliveredTo: [senderId],
+    };
     chat.messages.push(newMessage);
     chat.lastMessage = text;
     await chat.save();
