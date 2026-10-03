@@ -2,7 +2,19 @@ import mongoose from "mongoose";
 
 const messageSchema = new mongoose.Schema({
   sender: { type: mongoose.Schema.Types.ObjectId, ref: "User", required: true },
-  text: { type: String, required: true },
+  text: { type: String, default: "" },
+  audioUrl: { type: String },
+  audioDuration: { type: Number },
+  fileUrl: { type: String },
+  fileType: { type: String }, // "image" | "video" | "audio" | "raw" / "document"
+  fileName: { type: String },
+  fileSize: { type: Number },
+  replyTo: {
+    messageId: { type: mongoose.Schema.Types.Mixed },
+    text: { type: String },
+    senderName: { type: String },
+    senderId: { type: mongoose.Schema.Types.Mixed },
+  },
   deliveredTo: [{ type: mongoose.Schema.Types.ObjectId, ref: "User" }],
   readBy: [{ type: mongoose.Schema.Types.ObjectId, ref: "User" }],
   createdAt: { type: Date, default: Date.now }

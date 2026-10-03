@@ -59,14 +59,18 @@ const userSchema = new mongoose.Schema({
     }
   ],
 
-  // Native Huminer Web3 Wallets (USDT, BTC)
+  // Native Huminer Web3 Wallets (Multi-chain & Hybrid Vault)
   web3Wallets: {
     hasWallet: { type: Boolean, default: false },
+    encryptedVault: { type: String, default: "" }, // AES-GCM encrypted mnemonic/keys with user PIN
+    vaultSalt: { type: String, default: "" },      // Salt used for PBKDF2 key derivation
+    addresses: { type: Map, of: String, default: {} }, // Multi-chain addresses (BTC, ETH, SOL, TRON, etc.)
     usdtAddress: { type: String, default: "" },
     usdtBalance: { type: Number, default: 0 },
     btcAddress: { type: String, default: "" },
     btcBalance: { type: Number, default: 0 },
-    createdAt: { type: Date }
+    createdAt: { type: Date },
+    lastSyncedAt: { type: Date }
   },
 
   ////Paid out

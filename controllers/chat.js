@@ -62,18 +62,40 @@ export const getUserChats = async (req, res) => {
 // Send a message in a chat
 export const sendMessage = async (req, res) => {
   try {
-    const { chatId, senderId, text } = req.body;
+    const { chatId, senderId, text, replyTo, audioUrl, audioDuration, fileUrl, fileType, fileName, fileSize } = req.body;
 
-    if (!chatId || !senderId || !text) {
-      return res.status(400).json({ message: "chatId, senderId and text are required" });
+    if (!chatId || !senderId || (!text && !audioUrl && !fileUrl)) {
+      return res.status(400).json({ message: "chatId, senderId and text, audioUrl, or fileUrl are required" });
     }
 
     const chat = await Chat.findById(chatId);
     if (!chat) return res.status(404).json({ message: "Chat not found" });
 
-    const newMessage = { sender: senderId, text, readBy: [senderId], deliveredTo: [senderId] };
+    const newMessage = {
+      sender: senderId,
+      text: text || "",
+      audioUrl: audioUrl || undefined,
+      audioDuration: audioDuration || undefined,
+      fileUrl: fileUrl || undefined,
+      fileType: fileType || undefined,
+      fileName: fileName || undefined,
+      fileSize: fileSize || undefined,
+      replyTo: replyTo || undefined,
+      readBy: [senderId],
+      deliveredTo: [senderId],
+    };
     chat.messages.push(newMessage);
-    chat.lastMessage = text;
+    
+    let preview = text;
+    if (audioUrl) {
+      preview = "🎤 Voice message";
+    } else if (fileUrl) {
+      if (fileType === "image") preview = "📷 Photo";
+      else if (fileType === "video") preview = "🎥 Video";
+      else if (fileType === "audio") preview = "🎵 Audio file";
+      else preview = `📄 ${fileName || "Document"}`;
+    }
+    chat.lastMessage = preview;
     await chat.save();
 
     const populated = await chat.populate({
