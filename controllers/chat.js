@@ -62,10 +62,10 @@ export const getUserChats = async (req, res) => {
 // Send a message in a chat
 export const sendMessage = async (req, res) => {
   try {
-    const { chatId, senderId, text, replyTo } = req.body;
+    const { chatId, senderId, text, replyTo, audioUrl, audioDuration } = req.body;
 
-    if (!chatId || !senderId || !text) {
-      return res.status(400).json({ message: "chatId, senderId and text are required" });
+    if (!chatId || !senderId || (!text && !audioUrl)) {
+      return res.status(400).json({ message: "chatId, senderId and text or audioUrl are required" });
     }
 
     const chat = await Chat.findById(chatId);
@@ -73,13 +73,15 @@ export const sendMessage = async (req, res) => {
 
     const newMessage = {
       sender: senderId,
-      text,
+      text: text || "",
+      audioUrl: audioUrl || undefined,
+      audioDuration: audioDuration || undefined,
       replyTo: replyTo || undefined,
       readBy: [senderId],
       deliveredTo: [senderId],
     };
     chat.messages.push(newMessage);
-    chat.lastMessage = text;
+    chat.lastMessage = audioUrl ? "🎤 Voice message" : text;
     await chat.save();
 
     const populated = await chat.populate({

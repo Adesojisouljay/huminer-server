@@ -56,7 +56,7 @@ export const setupSocket = (server) => {
     /* --------------------------
          SEND MESSAGE
     ---------------------------*/
-    socket.on("sendMessage", async ({ chatId, senderId, text, replyTo }) => {
+    socket.on("sendMessage", async ({ chatId, senderId, text, replyTo, audioUrl, audioDuration }) => {
       try {
         const chat = await Chat.findById(chatId);
         if (!chat) return;
@@ -74,13 +74,15 @@ export const setupSocket = (server) => {
 
         const newMessage = {
           sender: senderId,
-          text,
+          text: text || "",
+          audioUrl: audioUrl || undefined,
+          audioDuration: audioDuration || undefined,
           replyTo: replyTo || undefined,
           deliveredTo: initialDelivered,
           readBy: [senderId],
         };
         chat.messages.push(newMessage);
-        chat.lastMessage = text;
+        chat.lastMessage = audioUrl ? "🎤 Voice message" : text;
         await chat.save();
 
         const populatedMessage = await chat.populate({
