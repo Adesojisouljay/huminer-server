@@ -56,7 +56,7 @@ export const setupSocket = (server) => {
     /* --------------------------
          SEND MESSAGE
     ---------------------------*/
-    socket.on("sendMessage", async ({ chatId, senderId, text, replyTo, audioUrl, audioDuration }) => {
+    socket.on("sendMessage", async ({ chatId, senderId, text, replyTo, audioUrl, audioDuration, fileUrl, fileType, fileName, fileSize }) => {
       try {
         const chat = await Chat.findById(chatId);
         if (!chat) return;
@@ -77,12 +77,26 @@ export const setupSocket = (server) => {
           text: text || "",
           audioUrl: audioUrl || undefined,
           audioDuration: audioDuration || undefined,
+          fileUrl: fileUrl || undefined,
+          fileType: fileType || undefined,
+          fileName: fileName || undefined,
+          fileSize: fileSize || undefined,
           replyTo: replyTo || undefined,
           deliveredTo: initialDelivered,
           readBy: [senderId],
         };
         chat.messages.push(newMessage);
-        chat.lastMessage = audioUrl ? "🎤 Voice message" : text;
+
+        let preview = text;
+        if (audioUrl) {
+          preview = "🎤 Voice message";
+        } else if (fileUrl) {
+          if (fileType === "image") preview = "📷 Photo";
+          else if (fileType === "video") preview = "🎥 Video";
+          else if (fileType === "audio") preview = "🎵 Audio file";
+          else preview = `📄 ${fileName || "Document"}`;
+        }
+        chat.lastMessage = preview;
         await chat.save();
 
         const populatedMessage = await chat.populate({

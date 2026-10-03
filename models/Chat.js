@@ -5,6 +5,10 @@ const messageSchema = new mongoose.Schema({
   text: { type: String, default: "" },
   audioUrl: { type: String },
   audioDuration: { type: Number },
+  fileUrl: { type: String },
+  fileType: { type: String }, // "image" | "video" | "audio" | "raw" / "document"
+  fileName: { type: String },
+  fileSize: { type: Number },
   replyTo: {
     messageId: { type: mongoose.Schema.Types.Mixed },
     text: { type: String },
