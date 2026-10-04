@@ -76,6 +76,13 @@ const postSchema = new mongoose.Schema(
     likes: [{ type: mongoose.Schema.Types.ObjectId, ref: "User" }], // 🟢 Likes
     reblogs: [{ type: mongoose.Schema.Types.ObjectId, ref: "User" }], // 🔁 Reblogs / Reshares
     saves: [{ type: mongoose.Schema.Types.ObjectId, ref: "User" }], // 🔖 Saved / Bookmarked
+    views: { type: Number, default: 0 }, // 👁️ Views count
+    viewedBy: [
+      {
+        userId: { type: mongoose.Schema.Types.ObjectId, ref: "User" },
+        lastViewedAt: { type: Date, default: Date.now }
+      }
+    ], // Viewers with timestamp for cooldown
 
     comments: [commentSchema]
   },

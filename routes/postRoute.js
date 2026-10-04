@@ -15,7 +15,8 @@ import {
   reblogPost,
   savePost,
   getRebloggedPosts,
-  getSavedPosts
+  getSavedPosts,
+  recordPostView
 } from "../controllers/post.js";
 import { authMiddleware } from "../middleware/inde.js";
 
@@ -28,6 +29,7 @@ router.get("/following", authMiddleware, getFollowingPosts); // 🟢 NEW: Follow
 router.get("/saved", authMiddleware, getSavedPosts); // 🔖 Saved posts for active user
 router.get("/reblogged/:username", getRebloggedPosts); // 🔁 Reblogged posts for a user
 router.get("/:id", getPostById); // single post
+router.put("/:id/view", recordPostView); // 👁️ Record view
 router.put("/:id/like", authMiddleware, likePost); // 🟢 Like post
 router.put("/:id/reblog", authMiddleware, reblogPost); // 🔁 Reblog/Reshare post
 router.put("/:id/save", authMiddleware, savePost); // 🔖 Save/Bookmark post
