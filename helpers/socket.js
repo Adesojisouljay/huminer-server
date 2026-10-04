@@ -286,6 +286,79 @@ export const setupSocket = (server) => {
   });
 
   
+  
+  // Group Call Room Tracking
+  
+  socket.on("joinGroupRoomTracker", async ({ chatId, userId }) => {
+    if (!global.activeGroupRooms) global.activeGroupRooms = new Map();
+    let room = global.activeGroupRooms.get(chatId.toString());
+    if (!room) {
+      room = new Set();
+      global.activeGroupRooms.set(chatId.toString(), room);
+    }
+    room.add(userId.toString());
+    
+    try {
+      const Chat = require("../models/Chat");
+      const chat = await Chat.findById(chatId);
+      if (chat && chat.participants) {
+        chat.participants.forEach(p => {
+          const pid = p.toString();
+          const pSocket = onlineUsers.get(pid);
+          if (pSocket) {
+            io.to(pSocket).emit("groupRoomStateUpdate", { chatId, count: room.size });
+          }
+        });
+      }
+    } catch(e) { console.error(e) }
+  });
+
+        }
+      });
+    }
+  });
+
+  
+  socket.on("leaveGroupRoomTracker", async ({ chatId, userId }) => {
+    if (!global.activeGroupRooms) return;
+    let room = global.activeGroupRooms.get(chatId.toString());
+    if (room) {
+      room.delete(userId.toString());
+      const count = room.size;
+      if (count === 0) {
+        global.activeGroupRooms.delete(chatId.toString());
+      }
+      
+      try {
+        const Chat = require("../models/Chat");
+        const chat = await Chat.findById(chatId);
+        if (chat && chat.participants) {
+          chat.participants.forEach(p => {
+            const pid = p.toString();
+            const pSocket = onlineUsers.get(pid);
+            if (pSocket) {
+              io.to(pSocket).emit("groupRoomStateUpdate", { chatId, count });
+            }
+          });
+        }
+      } catch(e) { console.error(e) }
+    }
+  });
+
+          }
+        });
+      }
+    }
+  });
+
+  socket.on("checkGroupRoomStatus", ({ chatId }, callback) => {
+    if (global.activeGroupRooms && global.activeGroupRooms.has(chatId.toString())) {
+      callback({ count: global.activeGroupRooms.get(chatId.toString()).size });
+    } else {
+      callback({ count: 0 });
+    }
+  });
+
   socket.on("startGroupCall", async ({ chatId, groupName, caller, participants, callType }) => {
     console.log(`[Group Call] ${caller.username} started a ${callType} call in ${groupName}`);
     
