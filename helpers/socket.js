@@ -287,8 +287,8 @@ export const setupSocket = (server) => {
 
   
   
-  // Group Call Room Tracking
   
+  // Group Call Room Tracking
   socket.on("joinGroupRoomTracker", async ({ chatId, userId }) => {
     if (!global.activeGroupRooms) global.activeGroupRooms = new Map();
     let room = global.activeGroupRooms.get(chatId.toString());
@@ -313,12 +313,6 @@ export const setupSocket = (server) => {
     } catch(e) { console.error(e) }
   });
 
-        }
-      });
-    }
-  });
-
-  
   socket.on("leaveGroupRoomTracker", async ({ chatId, userId }) => {
     if (!global.activeGroupRooms) return;
     let room = global.activeGroupRooms.get(chatId.toString());
@@ -342,12 +336,6 @@ export const setupSocket = (server) => {
           });
         }
       } catch(e) { console.error(e) }
-    }
-  });
-
-          }
-        });
-      }
     }
   });
 
@@ -433,7 +421,36 @@ export const setupSocket = (server) => {
     socket.on("disconnect", async () => {
       console.log("Client disconnected: " + socket.id);
 
+
+      // Clean up group rooms
+      if (socket.userId && global.activeGroupRooms) {
+        for (const [chatId, roomSet] of global.activeGroupRooms.entries()) {
+          if (roomSet.has(socket.userId.toString())) {
+            roomSet.delete(socket.userId.toString());
+            const count = roomSet.size;
+            if (count === 0) {
+              global.activeGroupRooms.delete(chatId);
+            }
+            // Broadcast to participants
+            try {
+              const Chat = require("../models/Chat");
+              Chat.findById(chatId).then(chat => {
+                if (chat && chat.participants) {
+                  chat.participants.forEach(p => {
+                    const pSocket = onlineUsers.get(p.toString());
+                    if (pSocket) {
+                      io.to(pSocket).emit("groupRoomStateUpdate", { chatId, count });
+                    }
+                  });
+                }
+              });
+            } catch(e) {}
+          }
+        }
+      }
+
       // Clean up any active call for this socket
+
       if (socket.userId) {
         for (const [key, call] of activeCalls.entries()) {
           if (call.callerId === socket.userId || call.calleeId === socket.userId) {
