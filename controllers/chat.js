@@ -62,10 +62,10 @@ export const getUserChats = async (req, res) => {
 // Send a message in a chat
 export const sendMessage = async (req, res) => {
   try {
-    const { chatId, senderId, text, replyTo, audioUrl, audioDuration, fileUrl, fileType, fileName, fileSize } = req.body;
+    const { chatId, senderId, text, replyTo, audioUrl, audioDuration, fileUrl, fileType, fileName, fileSize, sharedPost } = req.body;
 
-    if (!chatId || !senderId || (!text && !audioUrl && !fileUrl)) {
-      return res.status(400).json({ message: "chatId, senderId and text, audioUrl, or fileUrl are required" });
+    if (!chatId || !senderId || (!text && !audioUrl && !fileUrl && !sharedPost)) {
+      return res.status(400).json({ message: "chatId, senderId and text, audioUrl, fileUrl, or sharedPost are required" });
     }
 
     const chat = await Chat.findById(chatId);
@@ -81,6 +81,7 @@ export const sendMessage = async (req, res) => {
       fileName: fileName || undefined,
       fileSize: fileSize || undefined,
       replyTo: replyTo || undefined,
+      sharedPost: sharedPost || undefined,
       readBy: [senderId],
       deliveredTo: [senderId],
     };
@@ -94,6 +95,8 @@ export const sendMessage = async (req, res) => {
       else if (fileType === "video") preview = "🎥 Video";
       else if (fileType === "audio") preview = "🎵 Audio file";
       else preview = `📄 ${fileName || "Document"}`;
+    } else if (sharedPost) {
+      preview = `🔗 Shared post: ${sharedPost.title || "a post"}`;
     }
     chat.lastMessage = preview;
     await chat.save();
@@ -233,5 +236,31 @@ export const clearUserCallLogs = async (req, res) => {
   } catch (err) {
     console.error("clearUserCallLogs error:", err);
     res.status(500).json({ message: "Server error clearing call logs" });
+  }
+};
+// Create a new group chat
+export const createGroupChat = async (req, res) => {
+  try {
+    const { participants, groupName, adminId } = req.body;
+
+    if (!participants || participants.length < 2) {
+      return res.status(400).json({ message: "A group needs at least 2 participants" });
+    }
+
+    if (!groupName) {
+      return res.status(400).json({ message: "Group name is required" });
+    }
+
+    const newChat = await Chat.create({ 
+      participants,
+      isGroup: true,
+      groupName,
+      admin: [adminId]
+    });
+
+    res.status(201).json({ message: "Group chat created", chat: newChat });
+  } catch (err) {
+    console.error(err);
+    res.status(500).json({ message: "Server error" });
   }
 };

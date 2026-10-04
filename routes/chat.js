@@ -9,6 +9,7 @@ import {
   getUserCallLogs,
   deleteCallLog,
   clearUserCallLogs,
+  createGroupChat,
 } from "../controllers/chat.js";
 
 const router = express.Router();
@@ -20,6 +21,7 @@ router.delete("/calls/user/:userId/clear", clearUserCallLogs);
 
 // Create a new chat
 router.post("/", createChat);
+router.post("/group", createGroupChat);
 
 // Get all chats for a user
 router.get("/user/:userId", getUserChats); // prefix with /user so it doesn't conflict with chatId route
