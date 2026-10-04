@@ -42,15 +42,46 @@ export const createPost = async (req, res) => {
   }
 };
 
-// GET all posts (feed, optional tag filter)
+// GET all posts (modern algorithmic discovery & randomized feed like TikTok/Instagram/Facebook)
 export const getPosts = async (req, res) => {
   try {
-    const { tag } = req.query;
+    const { tag, sort } = req.query;
     const query = tag ? { tags: tag.toLowerCase() } : {};
 
-    const posts = await Post.find(query)
-      .populate("userId", "username email") // in case you want live user info
-      .sort({ createdAt: -1 });
+    // Allow explicit reverse-chronological sorting if requested
+    if (sort === "latest") {
+      const posts = await Post.find(query)
+        .populate("userId", "username email profilePicture")
+        .sort({ createdAt: -1 });
+      return res.status(200).json({ success: true, posts });
+    }
+
+    // Fetch candidate posts pool
+    const rawPosts = await Post.find(query)
+      .populate("userId", "username email profilePicture");
+
+    // Dynamic Discovery Feed:
+    // Blends organic engagement (likes, tips, comments, views) with random exploration.
+    // Posts are NOT strictly ordered by post time or age. Any post across time can be surfaced dynamically.
+    const scoredPosts = rawPosts.map((post) => {
+      const likes = Array.isArray(post.likes) ? post.likes.length : 0;
+      const tips = Array.isArray(post.tips) ? post.tips.length : 0;
+      const comments = Array.isArray(post.comments) ? post.comments.length : 0;
+      const views = typeof post.views === "number" ? post.views : 0;
+
+      // Base engagement weight + random exploration bonus
+      const engagement = (likes * 2) + (tips * 4) + (comments * 3) + (Math.log10(views + 1) * 2);
+      const randomFactor = Math.random() * 55; // High random variance ensures every load/swipe is fresh & diverse
+
+      return {
+        post,
+        score: engagement + randomFactor,
+      };
+    });
+
+    const posts = scoredPosts
+      .sort((a, b) => b.score - a.score)
+      .map((item) => item.post);
 
     res.status(200).json({ success: true, posts });
   } catch (err) {
@@ -92,6 +123,86 @@ export const getPostById = async (req, res) => {
   } catch (err) {
     console.error("GetPostById Error:", err.message);
     res.status(500).json({ success: false, message: "Server error fetching post" });
+  }
+};
+
+// Record view for a post (allows repeat views after a 3-minute cooldown, creator views never count)
+export const recordPostView = async (req, res) => {
+  try {
+    const { id } = req.params;
+    const { userId } = req.body;
+
+    const post = await Post.findById(id);
+    if (!post) {
+      return res.status(404).json({ success: false, message: "Post not found" });
+    }
+
+    // 1. Author's own views NEVER count
+    const postAuthorId = (post.userId?._id || post.userId)?.toString();
+    if (userId && postAuthorId && postAuthorId === userId.toString()) {
+      return res.status(200).json({ success: true, views: post.views || 0, isAuthor: true });
+    }
+
+    // 2. Ensure viewedBy and views are initialized
+    if (!Array.isArray(post.viewedBy)) {
+      post.viewedBy = [];
+    }
+    if (typeof post.views !== "number") {
+      post.views = 0;
+    }
+
+    // 3. Cooldown window: 3 minutes (180,000 ms)
+    const VIEW_COOLDOWN_MS = 3 * 60 * 1000;
+    const now = new Date();
+
+    if (userId) {
+      const viewerIndex = post.viewedBy.findIndex((item) => {
+        const itemUid = item?.userId ? item.userId.toString() : item?.toString();
+        return itemUid === userId.toString();
+      });
+
+      if (viewerIndex !== -1) {
+        const existingEntry = post.viewedBy[viewerIndex];
+        const lastViewedAt = existingEntry?.lastViewedAt
+          ? new Date(existingEntry.lastViewedAt).getTime()
+          : 0;
+
+        // If viewed within cooldown period, ignore and do not increment
+        if (Date.now() - lastViewedAt < VIEW_COOLDOWN_MS) {
+          return res.status(200).json({
+            success: true,
+            views: post.views,
+            cooldown: true,
+            remainingSeconds: Math.ceil((VIEW_COOLDOWN_MS - (Date.now() - lastViewedAt)) / 1000)
+          });
+        }
+
+        // Cooldown passed: record fresh view and update timestamp
+        post.viewedBy[viewerIndex] = {
+          userId,
+          lastViewedAt: now
+        };
+        post.views += 1;
+        await post.save();
+      } else {
+        // First view by this user
+        post.viewedBy.push({
+          userId,
+          lastViewedAt: now
+        });
+        post.views += 1;
+        await post.save();
+      }
+    } else {
+      // Unauthenticated viewer
+      post.views += 1;
+      await post.save();
+    }
+
+    res.status(200).json({ success: true, views: post.views });
+  } catch (err) {
+    console.error("recordPostView Error:", err.message);
+    res.status(500).json({ success: false, message: "Server error recording view" });
   }
 };
 

@@ -60,8 +60,21 @@ export const setupSocket = (server) => {
       try {
         const chat = await Chat.findById(chatId);
         if (!chat) return;
-
         socket.join(chatId);
+
+        // Check if group chat is muted and sender is not admin
+        if (chat.isGroup && chat.isMuted) {
+          const isAdmin = (chat.admin || []).some(
+            (a) => (a._id || a).toString() === senderId.toString()
+          );
+          if (!isAdmin) {
+            socket.emit("chatError", {
+              chatId,
+              message: "This group is muted by admin. Only admins can send messages.",
+            });
+            return;
+          }
+        }
 
         // Check which participants are currently online (delivered)
         const initialDelivered = [senderId];
@@ -349,7 +362,18 @@ export const setupSocket = (server) => {
 
   socket.on("startGroupCall", async ({ chatId, groupName, caller, participants, callType }) => {
     console.log(`[Group Call] ${caller.username} started a ${callType} call in ${groupName}`);
-    
+
+    // Record group call event to chat messages
+    recordCallToChat({
+      callerId: caller._id || caller,
+      chatId,
+      callType,
+      status: "answered",
+      duration: 0,
+      isGroup: true,
+      invitedCount: Math.max(1, (participants || []).length - 1),
+    });
+
     // Broadcast incoming call to all participants except the caller
     participants.forEach((p) => {
       const pid = p._id || p;
@@ -405,6 +429,18 @@ export const setupSocket = (server) => {
           console.error("Failed to finalize CallLog on endCall:", e);
         }
       }
+
+      // Record 1-on-1 call message into Chat
+      recordCallToChat({
+        callerId: call.callerId,
+        calleeId: call.calleeId,
+        callType: call.callType,
+        status,
+        duration,
+        logId: call.logId,
+        isGroup: false,
+      });
+
       activeCalls.delete(callKey);
     }
 
@@ -479,6 +515,18 @@ export const setupSocket = (server) => {
                 console.error("Error finalizing disconnected call log:", e);
               }
             }
+
+            // Record disconnected call to chat
+            recordCallToChat({
+              callerId: call.callerId,
+              calleeId: call.calleeId,
+              callType: call.callType,
+              status,
+              duration,
+              logId: call.logId,
+              isGroup: false,
+            });
+
             activeCalls.delete(key);
           }
         }
@@ -502,6 +550,77 @@ export const setupSocket = (server) => {
 export const emitMessage = (chatId, message) => {
   if (io) {
     io.to(chatId).emit("newMessage", { chatId, message });
+  }
+};
+
+export const recordCallToChat = async ({
+  callerId,
+  calleeId,
+  callType,
+  status,
+  duration,
+  logId,
+  isGroup,
+  chatId,
+  invitedCount,
+}) => {
+  try {
+    let chat;
+    if (isGroup && chatId) {
+      chat = await Chat.findById(chatId);
+    } else if (callerId && calleeId) {
+      chat = await Chat.findOne({
+        participants: { $all: [callerId, calleeId], $size: 2 },
+        isGroup: false,
+      });
+      if (!chat) {
+        chat = await Chat.create({
+          participants: [callerId, calleeId],
+          isGroup: false,
+        });
+      }
+    }
+
+    if (!chat) return;
+
+    const isVideo = callType === "video";
+    let text = "";
+    if (isGroup) {
+      text = isVideo ? "Group video call" : "Group call";
+    } else {
+      const callTitle = isVideo ? "Video call" : "Voice call";
+      text = status === "missed" ? `Missed ${callTitle.toLowerCase()}` : callTitle;
+    }
+
+    const callMsg = {
+      sender: callerId,
+      text,
+      callInfo: {
+        callLogId: logId || undefined,
+        callType: callType || "audio",
+        status: status || "missed",
+        duration: duration || 0,
+        isGroup: !!isGroup,
+        invitedCount: invitedCount || 0,
+      },
+      readBy: [callerId],
+      deliveredTo: chat.participants,
+      createdAt: new Date(),
+    };
+
+    chat.messages.push(callMsg);
+    chat.lastMessage = text;
+    await chat.save();
+
+    const populated = await chat.populate({
+      path: "messages.sender",
+      select: "username profilePicture",
+    });
+    const lastMessage = populated.messages[populated.messages.length - 1];
+
+    emitChatMessage(chat._id.toString(), lastMessage, callerId.toString(), chat.participants);
+  } catch (err) {
+    console.error("Error recording call to chat:", err);
   }
 };
 
@@ -535,5 +654,16 @@ export const emitUserBalanceUpdate = (targetUserId, balance) => {
     const uid = targetUserId.toString();
     console.log(`[Socket] Emitting balanceUpdated to user:${uid}`, balance);
     io.to(`user:${uid}`).emit("balanceUpdated", { balance });
+  }
+};
+
+export const emitGroupUpdated = (chatId, updatedChat) => {
+  if (io) {
+    const cid = chatId?.toString();
+    io.to(cid).emit("groupUpdated", { chatId: cid, chat: updatedChat });
+    (updatedChat.participants || []).forEach((p) => {
+      const pid = (p._id || p).toString();
+      io.to(`user:${pid}`).emit("groupUpdated", { chatId: cid, chat: updatedChat });
+    });
   }
 };

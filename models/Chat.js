@@ -1,8 +1,21 @@
 import mongoose from "mongoose";
 
+const callInfoSchema = new mongoose.Schema(
+  {
+    callLogId: { type: mongoose.Schema.Types.ObjectId, ref: "CallLog" },
+    callType: { type: String, enum: ["audio", "video"] },
+    status: { type: String, enum: ["answered", "missed", "rejected"] },
+    duration: { type: Number, default: 0 },
+    isGroup: { type: Boolean, default: false },
+    invitedCount: { type: Number, default: 0 },
+  },
+  { _id: false }
+);
+
 const messageSchema = new mongoose.Schema({
   sender: { type: mongoose.Schema.Types.ObjectId, ref: "User", required: true },
   text: { type: String, default: "" },
+  callInfo: { type: callInfoSchema, default: null },
   audioUrl: { type: String },
   audioDuration: { type: Number },
   fileUrl: { type: String },
@@ -35,7 +48,9 @@ const chatSchema = new mongoose.Schema({
   isGroup: { type: Boolean, default: false },
   groupName: { type: String, default: "" },
   groupIcon: { type: String, default: "" },
+  groupDescription: { type: String, default: "" },
   admin: [{ type: mongoose.Schema.Types.ObjectId, ref: "User" }],
+  isMuted: { type: Boolean, default: false },
   messages: [messageSchema],
   lastMessage: { type: String },
   updatedAt: { type: Date, default: Date.now }

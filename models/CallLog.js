@@ -13,6 +13,7 @@ const callLogSchema = new mongoose.Schema(
     startedAt: { type: Date, default: Date.now },
     endedAt: { type: Date },
     duration: { type: Number, default: 0 }, // Duration in seconds
+    seen: { type: Boolean, default: false },
   },
   { timestamps: true }
 );
