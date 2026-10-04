@@ -18,6 +18,7 @@ import paymentRoutes from "./routes/paymentRoute.js";
 import stakingRoutes from "./routes/stakingRoute.js";
 import walletRoutes from "./routes/walletRoute.js";
 import storyRoute from "./routes/storyRoute.js";
+import liveRoute from "./routes/liveRoute.js";
 import { handleWalletCallback } from "./controllers/payment.js";
 
 const app = express();
@@ -53,6 +54,7 @@ app.use("/api/payment", paymentRoutes);
 app.use("/api/staking", stakingRoutes);
 app.use("/api/wallet", walletRoutes);
 app.use("/api/stories", storyRoute);
+app.use("/api/live", liveRoute);
 
 server.listen(PORT, () => {
   console.log(`Music platfrom is running on port ${PORT}`);

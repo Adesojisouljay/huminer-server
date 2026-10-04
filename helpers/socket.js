@@ -450,6 +450,47 @@ export const setupSocket = (server) => {
       io.to(targetSocketId).emit("callEnded", { fromUserId: fromUid });
     }
   });
+
+    /* --------------------------
+       LIVE STREAM SYSTEM
+    ---------------------------*/
+    socket.on("joinLiveRoom", ({ roomId, user }) => {
+      if (!roomId) return;
+      socket.join(roomId);
+      socket.liveRoomId = roomId;
+      socket.liveUser = user;
+
+      const clients = io.sockets.adapter.rooms.get(roomId);
+      const count = clients ? clients.size : 1;
+      io.to(roomId).emit("liveViewerCount", { roomId, count });
+      if (user) {
+        socket.to(roomId).emit("liveUserJoined", { user });
+      }
+    });
+
+    socket.on("leaveLiveRoom", ({ roomId }) => {
+      if (!roomId) return;
+      socket.leave(roomId);
+      socket.liveRoomId = null;
+      const clients = io.sockets.adapter.rooms.get(roomId);
+      const count = clients ? clients.size : 0;
+      io.to(roomId).emit("liveViewerCount", { roomId, count });
+    });
+
+    socket.on("sendLiveComment", ({ roomId, user, text }) => {
+      if (!roomId || !text) return;
+      io.to(roomId).emit("newLiveComment", {
+        _id: "c_" + Date.now() + "_" + Math.random().toString(36).substr(2, 6),
+        user,
+        text,
+        createdAt: new Date(),
+      });
+    });
+
+    socket.on("sendLiveReaction", ({ roomId, reaction }) => {
+      if (!roomId) return;
+      socket.to(roomId).emit("newLiveReaction", { reaction });
+    });
   
     /* --------------------------
          USER DISCONNECTS
@@ -667,3 +708,16 @@ export const emitGroupUpdated = (chatId, updatedChat) => {
     });
   }
 };
+
+export const emitLiveTip = (roomId, tipData) => {
+  if (io && roomId) {
+    io.to(roomId).emit("newLiveTip", tipData);
+  }
+};
+
+export const emitLiveEnded = (roomId) => {
+  if (io && roomId) {
+    io.to(roomId).emit("liveStreamEnded", { roomId });
+  }
+};
+
