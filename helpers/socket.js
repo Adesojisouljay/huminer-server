@@ -285,6 +285,28 @@ export const setupSocket = (server) => {
     }
   });
 
+  
+  socket.on("startGroupCall", async ({ chatId, groupName, caller, participants, callType }) => {
+    console.log(`[Group Call] ${caller.username} started a ${callType} call in ${groupName}`);
+    
+    // Broadcast incoming call to all participants except the caller
+    participants.forEach((p) => {
+      const pid = p._id || p;
+      if (pid.toString() !== caller._id.toString()) {
+        const pSocket = onlineUsers.get(pid.toString());
+        if (pSocket) {
+          io.to(pSocket).emit("incomingGroupCall", {
+            chatId,
+            groupName,
+            caller,
+            callType,
+            timestamp: Date.now()
+          });
+        }
+      }
+    });
+  });
+
   socket.on("endCall", async ({ toUserId, fromUserId }) => {
     const targetUid = toUserId?.toString();
     const fromUid = fromUserId?.toString();

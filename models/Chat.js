@@ -15,6 +15,14 @@ const messageSchema = new mongoose.Schema({
     senderName: { type: String },
     senderId: { type: mongoose.Schema.Types.Mixed },
   },
+  // Shared post card preview
+  sharedPost: {
+    postId: { type: mongoose.Schema.Types.ObjectId, ref: "Post" },
+    title: { type: String },
+    author: { type: String },
+    thumbnail: { type: String }, // first image/video thumbnail url
+    body: { type: String },      // short excerpt
+  },
   deliveredTo: [{ type: mongoose.Schema.Types.ObjectId, ref: "User" }],
   readBy: [{ type: mongoose.Schema.Types.ObjectId, ref: "User" }],
   createdAt: { type: Date, default: Date.now }
@@ -24,6 +32,10 @@ const chatSchema = new mongoose.Schema({
   participants: [
     { type: mongoose.Schema.Types.ObjectId, ref: "User", required: true }
   ],
+  isGroup: { type: Boolean, default: false },
+  groupName: { type: String, default: "" },
+  groupIcon: { type: String, default: "" },
+  admin: [{ type: mongoose.Schema.Types.ObjectId, ref: "User" }],
   messages: [messageSchema],
   lastMessage: { type: String },
   updatedAt: { type: Date, default: Date.now }
