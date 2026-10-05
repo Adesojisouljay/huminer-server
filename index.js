@@ -20,6 +20,7 @@ import walletRoutes from "./routes/walletRoute.js";
 import storyRoute from "./routes/storyRoute.js";
 import liveRoute from "./routes/liveRoute.js";
 import { handleWalletCallback } from "./controllers/payment.js";
+import { renderPostSharePreview } from "./controllers/post.js";
 
 const app = express();
 const server = http.createServer(app);
@@ -43,6 +44,9 @@ setupSocket(server);
 
 // Paystack Redirect Callback
 app.get("/wallet", handleWalletCallback);
+
+// Rich Social Previews for direct links (WhatsApp, Twitter, Facebook, Telegram, etc.)
+app.get("/post/:id", renderPostSharePreview);
 
 // Routes
 app.use("/api/users", userRoute);
