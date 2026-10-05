@@ -111,7 +111,98 @@ export const getTrendingTags = async (req, res) => {
   }
 };
 
-// GET single post by ID
+// Detect social media link preview bots & scrapers (WhatsApp, Facebook, Twitter, Telegram, Discord, LinkedIn, Google)
+const isSocialCrawler = (userAgent = "") => {
+  const ua = userAgent.toLowerCase();
+  return (
+    ua.includes("whatsapp") ||
+    ua.includes("facebookexternalhit") ||
+    ua.includes("facebot") ||
+    ua.includes("twitterbot") ||
+    ua.includes("telegrambot") ||
+    ua.includes("discordbot") ||
+    ua.includes("slackbot") ||
+    ua.includes("linkedinbot") ||
+    ua.includes("pinterest") ||
+    ua.includes("embedly") ||
+    ua.includes("quora link preview") ||
+    ua.includes("outbrain") ||
+    ua.includes("vkshare") ||
+    ua.includes("w3c_validator") ||
+    ua.includes("google-structured-data-testing-tool") ||
+    ua.includes("bingbot") ||
+    ua.includes("googlebot")
+  );
+};
+
+// Generates beautiful Open Graph HTML for crawler bots
+export const generatePostOpenGraphHtml = (post, req) => {
+  const authorName = post.author || post.userId?.username || "Creator";
+  const postTitle = post.title ? `${post.title} by @${authorName} | Huminer` : `@${authorName} on Huminer`;
+  const snippet = post.body
+    ? post.body.replace(/\r?\n|\r/g, " ").substring(0, 180)
+    : "Watch and discover exclusive creations on Huminer - The Next-Gen Social Economy.";
+
+  // Find image or video poster
+  const imageMedia = post.media?.find((m) => m.type === "image");
+  const videoMedia = post.media?.find((m) => m.type === "video");
+
+  let imageUrl = "https://huminer.adesojisouljay.com/logo512.png";
+  if (imageMedia?.url) {
+    imageUrl = imageMedia.url;
+  } else if (videoMedia?.url) {
+    // Cloudinary or similar thumbnail extraction if applicable
+    if (videoMedia.url.includes("/upload/")) {
+      imageUrl = videoMedia.url.replace(/\.[^/.]+$/, ".jpg");
+    } else {
+      imageUrl = videoMedia.url;
+    }
+  }
+
+  const postUrl = `https://huminer.adesojisouljay.com/post/${post._id}`;
+
+  const escapeHtml = (str) =>
+    (str || "").replace(/[&<>"']/g, (m) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[m]));
+
+  return `<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <title>${escapeHtml(postTitle)}</title>
+  <meta name="description" content="${escapeHtml(snippet)}" />
+
+  <!-- Open Graph / WhatsApp / Facebook -->
+  <meta property="og:type" content="${videoMedia ? "video.other" : "article"}" />
+  <meta property="og:site_name" content="Huminer" />
+  <meta property="og:url" content="${escapeHtml(postUrl)}" />
+  <meta property="og:title" content="${escapeHtml(postTitle)}" />
+  <meta property="og:description" content="${escapeHtml(snippet)}" />
+  <meta property="og:image" content="${escapeHtml(imageUrl)}" />
+  <meta property="og:image:secure_url" content="${escapeHtml(imageUrl)}" />
+  <meta property="og:image:alt" content="${escapeHtml(postTitle)}" />
+  ${videoMedia ? `<meta property="og:video" content="${escapeHtml(videoMedia.url)}" />` : ""}
+
+  <!-- Twitter -->
+  <meta name="twitter:card" content="summary_large_image" />
+  <meta name="twitter:site" content="@Huminer" />
+  <meta name="twitter:url" content="${escapeHtml(postUrl)}" />
+  <meta name="twitter:title" content="${escapeHtml(postTitle)}" />
+  <meta name="twitter:description" content="${escapeHtml(snippet)}" />
+  <meta name="twitter:image" content="${escapeHtml(imageUrl)}" />
+
+  <!-- Instant Client Redirect for human visitors who hit this URL directly -->
+  <meta http-equiv="refresh" content="0; url=${escapeHtml(postUrl)}" />
+  <script>window.location.replace("${escapeHtml(postUrl)}");</script>
+</head>
+<body style="background:#0b0f19;color:#fff;font-family:sans-serif;padding:20px;text-align:center;">
+  <h2>${escapeHtml(postTitle)}</h2>
+  <p>${escapeHtml(snippet)}</p>
+  <p>Redirecting to <a href="${escapeHtml(postUrl)}" style="color:#ffd700;">Huminer</a>...</p>
+</body>
+</html>`;
+};
+
+// GET single post by ID (Serves JSON for API calls, or Open Graph HTML for social crawlers)
 export const getPostById = async (req, res) => {
   try {
     const post = await Post.findById(req.params.id)
@@ -122,10 +213,41 @@ export const getPostById = async (req, res) => {
       return res.status(404).json({ success: false, message: "Post not found" });
     }
 
+    const ua = req.headers["user-agent"] || "";
+    // If request comes from a social crawler and accepts HTML, serve rich OG HTML
+    if (isSocialCrawler(ua) && req.accepts(["html", "json"]) === "html") {
+      res.setHeader("Content-Type", "text/html; charset=utf-8");
+      return res.send(generatePostOpenGraphHtml(post, req));
+    }
+
     res.status(200).json({ success: true, post });
   } catch (err) {
     console.error("GetPostById Error:", err.message);
     res.status(500).json({ success: false, message: "Server error fetching post" });
+  }
+};
+
+// Dedicated endpoint to serve rich HTML metadata preview for crawlers or direct sharing: GET /post/:id
+export const renderPostSharePreview = async (req, res) => {
+  try {
+    const post = await Post.findById(req.params.id)
+      .populate("userId", "username email profilePicture verified verificationExpiresAt");
+
+    if (!post) {
+      return res.redirect("https://huminer.adesojisouljay.com");
+    }
+
+    const ua = req.headers["user-agent"] || "";
+    if (isSocialCrawler(ua)) {
+      res.setHeader("Content-Type", "text/html; charset=utf-8");
+      return res.send(generatePostOpenGraphHtml(post, req));
+    }
+
+    // For real users, redirect to web client
+    return res.redirect(`https://huminer.adesojisouljay.com/post/${post._id}`);
+  } catch (err) {
+    console.error("renderPostSharePreview error:", err);
+    return res.redirect("https://huminer.adesojisouljay.com");
   }
 };
 
