@@ -46,7 +46,10 @@ export const createPost = async (req, res) => {
 export const getPosts = async (req, res) => {
   try {
     const { tag, sort } = req.query;
-    const query = tag ? { tags: tag.toLowerCase() } : {};
+    const query = {
+      isArchived: { $ne: true },
+      ...(tag ? { tags: tag.toLowerCase() } : {})
+    };
 
     // Allow explicit reverse-chronological sorting if requested
     if (sort === "latest") {
@@ -225,6 +228,202 @@ export const deletePost = async (req, res) => {
   } catch (err) {
     console.error("DeletePost Error:", err.message);
     res.status(500).json({ success: false, message: "Server error deleting post" });
+  }
+};
+
+// ✏️ EDIT post (title, body, tags)
+export const editPost = async (req, res) => {
+  try {
+    const { id } = req.params;
+    const { title, body, tags } = req.body;
+
+    const post = await Post.findById(id);
+    if (!post) {
+      return res.status(404).json({ success: false, message: "Post not found" });
+    }
+
+    if (post.userId.toString() !== req.user.id) {
+      return res.status(403).json({ success: false, message: "Not authorized to edit this post" });
+    }
+
+    if (title !== undefined) post.title = title.trim();
+    if (body !== undefined) post.body = body.trim();
+    if (tags !== undefined) {
+      post.tags = Array.isArray(tags)
+        ? tags.map((t) => t.trim().toLowerCase().replace(/^#/, "")).filter(Boolean)
+        : post.tags;
+    }
+
+    post.isEdited = true;
+    post.editedAt = new Date();
+
+    await post.save();
+    await post.populate("userId", "username email profilePicture verified verificationExpiresAt");
+
+    res.status(200).json({
+      success: true,
+      message: "Post updated successfully",
+      post
+    });
+  } catch (err) {
+    console.error("editPost Error:", err.message);
+    res.status(500).json({ success: false, message: "Server error editing post" });
+  }
+};
+
+// 📦 ARCHIVE / UNARCHIVE post (toggle visibility so only the creator sees it)
+export const toggleArchivePost = async (req, res) => {
+  try {
+    const { id } = req.params;
+    const post = await Post.findById(id);
+
+    if (!post) {
+      return res.status(404).json({ success: false, message: "Post not found" });
+    }
+
+    if (post.userId.toString() !== req.user.id) {
+      return res.status(403).json({ success: false, message: "Not authorized to manage this post" });
+    }
+
+    post.isArchived = !post.isArchived;
+    await post.save();
+    await post.populate("userId", "username email profilePicture verified verificationExpiresAt");
+
+    res.status(200).json({
+      success: true,
+      isArchived: post.isArchived,
+      message: post.isArchived ? "Post archived (only you can see it)" : "Post unarchived and public",
+      post
+    });
+  } catch (err) {
+    console.error("toggleArchivePost Error:", err.message);
+    res.status(500).json({ success: false, message: "Server error archiving post" });
+  }
+};
+
+// 📦 GET ARCHIVED posts (creator only)
+export const getArchivedPosts = async (req, res) => {
+  try {
+    const userId = req.user.id;
+    const posts = await Post.find({ userId, isArchived: true })
+      .populate("userId", "username email profilePicture verified verificationExpiresAt")
+      .sort({ createdAt: -1 });
+
+    res.status(200).json({ success: true, posts });
+  } catch (err) {
+    console.error("getArchivedPosts Error:", err.message);
+    res.status(500).json({ success: false, message: "Server error fetching archived posts" });
+  }
+};
+
+// ✏️ EDIT comment or reply
+export const editComment = async (req, res) => {
+  try {
+    const { postId, commentId } = req.params;
+    const { content } = req.body;
+
+    if (!content || !content.trim()) {
+      return res.status(400).json({ success: false, message: "Comment content cannot be empty" });
+    }
+
+    const post = await Post.findById(postId);
+    if (!post) {
+      return res.status(404).json({ success: false, message: "Post not found" });
+    }
+
+    let targetComment = post.comments.id(commentId);
+    if (!targetComment) {
+      for (const c of post.comments) {
+        const child = c.children?.id(commentId);
+        if (child) {
+          targetComment = child;
+          break;
+        }
+      }
+    }
+
+    if (!targetComment) {
+      return res.status(404).json({ success: false, message: "Comment not found" });
+    }
+
+    if (targetComment.userId.toString() !== req.user.id) {
+      return res.status(403).json({ success: false, message: "Not authorized to edit this comment" });
+    }
+
+    targetComment.content = content.trim();
+    targetComment.isEdited = true;
+    targetComment.editedAt = new Date();
+
+    await post.save();
+    await post.populate("userId", "username email profilePicture verified verificationExpiresAt");
+    await post.populate("comments.userId", "username email profilePicture verified");
+
+    res.status(200).json({
+      success: true,
+      message: "Comment updated successfully",
+      post,
+      comment: targetComment
+    });
+  } catch (err) {
+    console.error("editComment Error:", err.message);
+    res.status(500).json({ success: false, message: "Server error editing comment" });
+  }
+};
+
+// 🗑️ DELETE comment or reply (post author or comment author can delete)
+export const deleteComment = async (req, res) => {
+  try {
+    const { postId, commentId } = req.params;
+    const post = await Post.findById(postId);
+    if (!post) {
+      return res.status(404).json({ success: false, message: "Post not found" });
+    }
+
+    const currentUserId = req.user.id;
+    const isPostOwner = post.userId.toString() === currentUserId;
+
+    // Check if it's a top-level comment
+    const topComment = post.comments.id(commentId);
+    if (topComment) {
+      if (!isPostOwner && topComment.userId.toString() !== currentUserId) {
+        return res.status(403).json({ success: false, message: "Not authorized to delete this comment" });
+      }
+      post.comments.pull(commentId);
+      await post.save();
+      await post.populate("userId", "username email profilePicture verified verificationExpiresAt");
+      await post.populate("comments.userId", "username email profilePicture verified");
+
+      return res.status(200).json({
+        success: true,
+        message: "Comment deleted successfully",
+        post
+      });
+    }
+
+    // Check if it's a child reply
+    for (const c of post.comments) {
+      const child = c.children?.id(commentId);
+      if (child) {
+        if (!isPostOwner && child.userId.toString() !== currentUserId) {
+          return res.status(403).json({ success: false, message: "Not authorized to delete this reply" });
+        }
+        c.children.pull(commentId);
+        await post.save();
+        await post.populate("userId", "username email profilePicture verified verificationExpiresAt");
+        await post.populate("comments.userId", "username email profilePicture verified");
+
+        return res.status(200).json({
+          success: true,
+          message: "Reply deleted successfully",
+          post
+        });
+      }
+    }
+
+    return res.status(404).json({ success: false, message: "Comment not found" });
+  } catch (err) {
+    console.error("deleteComment Error:", err.message);
+    res.status(500).json({ success: false, message: "Server error deleting comment" });
   }
 };
 
@@ -693,10 +892,10 @@ export const getRandomPosts = async (req, res) => {
   try {
     const limit = parseInt(req.query.limit) || 5;
 
-    const count = await Post.countDocuments();
+    const count = await Post.countDocuments({ isArchived: { $ne: true } });
     const random = Math.floor(Math.random() * Math.max(0, count - limit));
 
-    const posts = await Post.find()
+    const posts = await Post.find({ isArchived: { $ne: true } })
       .skip(random)
       .limit(limit)
       .populate("userId", "username email")
@@ -724,8 +923,8 @@ export const getPostsByUsername = async (req, res) => {
       });
     }
 
-    // 2️⃣ Find the posts by this user
-    const posts = await Post.find({ userId: user._id })
+    // 2️⃣ Find the public (non-archived) posts by this user
+    const posts = await Post.find({ userId: user._id, isArchived: { $ne: true } })
       .populate("userId", "username email profilePicture verified verificationExpiresAt")
       .sort({ createdAt: -1 });
 
@@ -750,8 +949,8 @@ export const getFollowingPosts = async (req, res) => {
     // Get list of followed user IDs
     const followingIds = currentUser.following;
 
-    // Find posts where userId is in the following list
-    const posts = await Post.find({ userId: { $in: followingIds } })
+    // Find non-archived posts where userId is in the following list
+    const posts = await Post.find({ userId: { $in: followingIds }, isArchived: { $ne: true } })
       .populate("userId", "username email profilePicture verified verificationExpiresAt")
       .sort({ createdAt: -1 });
 

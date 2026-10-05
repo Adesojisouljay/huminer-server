@@ -439,13 +439,58 @@ export const deleteBankAccount = async (req, res) => {
   }
 };
 
-// 🔵 MONTHLY VERIFICATION BADGE SUBSCRIPTION
-const VERIFICATION_MONTHLY_FEE = 1500; // ₦1,500 per month
+// 🔵 VERIFICATION BADGE SUBSCRIPTION PLANS (WITH DISCOUNTS)
+export const VERIFICATION_PLANS = {
+  1: {
+    months: 1,
+    name: "1 Month",
+    label: "Monthly Pass",
+    fee: 1500,
+    originalFee: 1500,
+    discountPercent: 0,
+    days: 30,
+    badgeText: null
+  },
+  3: {
+    months: 3,
+    name: "3 Months",
+    label: "Quarterly Pass",
+    fee: 4050, // ₦1,350/mo (10% discount from ₦4,500)
+    originalFee: 4500,
+    discountPercent: 10,
+    days: 90,
+    badgeText: "Save 10%"
+  },
+  6: {
+    months: 6,
+    name: "6 Months",
+    label: "Semi-Annual Pass",
+    fee: 7200, // ₦1,200/mo (20% discount from ₦9,000)
+    originalFee: 9000,
+    discountPercent: 20,
+    days: 180,
+    badgeText: "Save 20%"
+  },
+  12: {
+    months: 12,
+    name: "1 Year",
+    label: "Annual Pass",
+    fee: 11700, // ₦975/mo (35% discount from ₦18,000)
+    originalFee: 18000,
+    discountPercent: 35,
+    days: 365,
+    badgeText: "Save 35% • Best Value"
+  }
+};
 
 export const subscribeVerification = async (req, res) => {
   try {
     const userId = req.user.id;
-    const { paymentMethod = "balance", callbackUrl } = req.body; // "balance" | "paystack"
+    const { paymentMethod = "balance", durationMonths = 1, callbackUrl } = req.body; // "balance" | "paystack"
+
+    const selectedPlan = VERIFICATION_PLANS[Number(durationMonths)] || VERIFICATION_PLANS[1];
+    const planFee = selectedPlan.fee;
+    const planDays = selectedPlan.days;
 
     const user = await User.findById(userId);
     if (!user) {
@@ -457,25 +502,25 @@ export const subscribeVerification = async (req, res) => {
 
     // Option A: Pay directly from Huminer in-app account balance
     if (paymentMethod === "balance") {
-      if ((user.accountBalance || 0) < VERIFICATION_MONTHLY_FEE) {
+      if ((user.accountBalance || 0) < planFee) {
         return res.status(400).json({
           success: false,
           insufficientBalance: true,
-          requiredAmount: VERIFICATION_MONTHLY_FEE,
+          requiredAmount: planFee,
           balance: user.accountBalance || 0,
-          message: `Insufficient balance. Verification subscription is ₦${VERIFICATION_MONTHLY_FEE.toLocaleString()}/month. Please top up your wallet first or pay via Paystack.`
+          message: `Insufficient balance. ${selectedPlan.name} subscription is ₦${planFee.toLocaleString()}. Please top up your wallet first or pay via Paystack.`
         });
       }
 
       // Deduct balance
-      user.accountBalance -= VERIFICATION_MONTHLY_FEE;
+      user.accountBalance -= planFee;
 
-      // Extend expiration date by 30 days from now (or from previous expiration if already active)
+      // Extend expiration date by plan days from now (or from previous active expiration)
       const baseDate = user.verified && user.verificationExpiresAt && new Date(user.verificationExpiresAt) > new Date()
         ? new Date(user.verificationExpiresAt)
         : new Date();
 
-      const newExpiry = new Date(baseDate.getTime() + 30 * 24 * 60 * 60 * 1000);
+      const newExpiry = new Date(baseDate.getTime() + planDays * 24 * 60 * 60 * 1000);
       user.verified = true;
       user.verificationExpiresAt = newExpiry;
 
@@ -487,11 +532,12 @@ export const subscribeVerification = async (req, res) => {
 
       return res.status(200).json({
         success: true,
-        message: `Congratulations! Your account is verified until ${newExpiry.toLocaleDateString()}.`,
+        message: `Congratulations! Your account is verified for ${selectedPlan.name} until ${newExpiry.toLocaleDateString()}.`,
         user: userObj,
         verified: true,
         verificationExpiresAt: newExpiry,
-        balance: user.accountBalance
+        balance: user.accountBalance,
+        plan: selectedPlan
       });
     }
 
@@ -513,13 +559,16 @@ export const subscribeVerification = async (req, res) => {
             "https://api.paystack.co/transaction/initialize",
             {
               email: userEmail,
-              amount: VERIFICATION_MONTHLY_FEE * 100, // in kobo
+              amount: planFee * 100, // in kobo
               reference,
               callback_url: safeCallback,
               metadata: {
                 type: "verification_subscription",
                 userId: user._id.toString(),
-                username: user.username
+                username: user.username,
+                durationMonths: selectedPlan.months,
+                days: planDays,
+                fee: planFee
               }
             },
             {
@@ -544,7 +593,8 @@ export const subscribeVerification = async (req, res) => {
         reference,
         accessCode,
         authorizationUrl,
-        amount: VERIFICATION_MONTHLY_FEE,
+        amount: planFee,
+        plan: selectedPlan,
         email: userEmail,
         publicKey: process.env.PAYSTACK_PUBLIC_KEY
       });
@@ -577,11 +627,16 @@ export const verifyVerificationPayment = async (req, res) => {
       const user = await User.findById(userId);
       if (!user) return res.status(404).json({ success: false, message: "User not found" });
 
+      const metadata = data?.metadata || {};
+      const durationMonths = Number(metadata.durationMonths) || 1;
+      const plan = VERIFICATION_PLANS[durationMonths] || VERIFICATION_PLANS[1];
+      const planDays = metadata.days || plan.days;
+
       const baseDate = user.verified && user.verificationExpiresAt && new Date(user.verificationExpiresAt) > new Date()
         ? new Date(user.verificationExpiresAt)
         : new Date();
 
-      const newExpiry = new Date(baseDate.getTime() + 30 * 24 * 60 * 60 * 1000);
+      const newExpiry = new Date(baseDate.getTime() + planDays * 24 * 60 * 60 * 1000);
       user.verified = true;
       user.verificationExpiresAt = newExpiry;
       await user.save();
@@ -591,10 +646,11 @@ export const verifyVerificationPayment = async (req, res) => {
 
       return res.status(200).json({
         success: true,
-        message: `Verification badge activated until ${newExpiry.toLocaleDateString()}!`,
+        message: `Verification badge activated for ${plan.name} until ${newExpiry.toLocaleDateString()}!`,
         user: userObj,
         verified: true,
-        verificationExpiresAt: newExpiry
+        verificationExpiresAt: newExpiry,
+        plan
       });
     }
 
