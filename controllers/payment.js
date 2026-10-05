@@ -509,11 +509,12 @@ export const handlePaystackWebhook = async (req, res) => {
             if (metadata?.type === "verification_subscription" && metadata?.userId) {
                 const user = await User.findById(metadata.userId);
                 if (user) {
+                    const daysToAdd = Number(metadata.days) || (Number(metadata.durationMonths) ? Number(metadata.durationMonths) * 30 : 30);
                     const baseDate = user.verified && user.verificationExpiresAt && new Date(user.verificationExpiresAt) > new Date()
                         ? new Date(user.verificationExpiresAt)
                         : new Date();
                     user.verified = true;
-                    user.verificationExpiresAt = new Date(baseDate.getTime() + 30 * 24 * 60 * 60 * 1000);
+                    user.verificationExpiresAt = new Date(baseDate.getTime() + daysToAdd * 24 * 60 * 60 * 1000);
                     await user.save();
                 }
                 return res.sendStatus(200);

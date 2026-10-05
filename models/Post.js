@@ -25,7 +25,11 @@ const childReplySchema = new mongoose.Schema(
     tips: [tipSchema],
     totalTips: { type: Number, default: 0 },
     payoutAt: { type: Date, default: () => new Date(Date.now() + 7 * 24 * 3600 * 1000) },
-    isPaidOut: { type: Boolean, default: false }
+    isPaidOut: { type: Boolean, default: false },
+
+    // ✏️ Edit & Management fields
+    isEdited: { type: Boolean, default: false },
+    editedAt: { type: Date }
   },
   { timestamps: true }
 );
@@ -47,7 +51,11 @@ const commentSchema = new mongoose.Schema(
     tips: [tipSchema],
     totalTips: { type: Number, default: 0 },
     payoutAt: { type: Date, default: () => new Date(Date.now() + 7 * 24 * 3600 * 1000) },
-    isPaidOut: { type: Boolean, default: false }
+    isPaidOut: { type: Boolean, default: false },
+
+    // ✏️ Edit & Management fields
+    isEdited: { type: Boolean, default: false },
+    editedAt: { type: Date }
   },
   { timestamps: true }
 );
@@ -83,6 +91,11 @@ const postSchema = new mongoose.Schema(
         lastViewedAt: { type: Date, default: Date.now }
       }
     ], // Viewers with timestamp for cooldown
+
+    // 📦 Archive & Edit flags
+    isArchived: { type: Boolean, default: false, index: true },
+    isEdited: { type: Boolean, default: false },
+    editedAt: { type: Date },
 
     comments: [commentSchema]
   },
