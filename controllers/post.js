@@ -51,14 +51,14 @@ export const getPosts = async (req, res) => {
     // Allow explicit reverse-chronological sorting if requested
     if (sort === "latest") {
       const posts = await Post.find(query)
-        .populate("userId", "username email profilePicture")
+        .populate("userId", "username email profilePicture verified verificationExpiresAt")
         .sort({ createdAt: -1 });
       return res.status(200).json({ success: true, posts });
     }
 
     // Fetch candidate posts pool
     const rawPosts = await Post.find(query)
-      .populate("userId", "username email profilePicture");
+      .populate("userId", "username email profilePicture verified verificationExpiresAt");
 
     // Dynamic Discovery Feed:
     // Blends organic engagement (likes, tips, comments, views) with random exploration.
@@ -112,8 +112,8 @@ export const getTrendingTags = async (req, res) => {
 export const getPostById = async (req, res) => {
   try {
     const post = await Post.findById(req.params.id)
-      .populate("userId", "username email")
-      .populate("comments.userId", "username email");
+      .populate("userId", "username email profilePicture verified verificationExpiresAt")
+      .populate("comments.userId", "username email profilePicture verified");
 
     if (!post) {
       return res.status(404).json({ success: false, message: "Post not found" });
@@ -726,7 +726,7 @@ export const getPostsByUsername = async (req, res) => {
 
     // 2️⃣ Find the posts by this user
     const posts = await Post.find({ userId: user._id })
-      .populate("userId", "username email profilePicture")
+      .populate("userId", "username email profilePicture verified verificationExpiresAt")
       .sort({ createdAt: -1 });
 
     return res.status(200).json({
@@ -752,7 +752,7 @@ export const getFollowingPosts = async (req, res) => {
 
     // Find posts where userId is in the following list
     const posts = await Post.find({ userId: { $in: followingIds } })
-      .populate("userId", "username email profilePicture")
+      .populate("userId", "username email profilePicture verified verificationExpiresAt")
       .sort({ createdAt: -1 });
 
     res.status(200).json({ success: true, posts });

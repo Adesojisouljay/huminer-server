@@ -1,7 +1,26 @@
 import User from "../models/User.js";
 import bcrypt from "bcrypt";
-import jwt from "jsonwebtoken"
+import jwt from "jsonwebtoken";
+import axios from "axios";
 import { createNotification } from "../helpers/index.js";
+
+// Helper to check and maintain monthly verification subscription status
+export const checkAndRefreshUserVerification = async (user) => {
+  if (!user) return user;
+  if (user.verified) {
+    // If user has an expiration date and it has passed, revoke verification
+    if (user.verificationExpiresAt && new Date(user.verificationExpiresAt) < new Date()) {
+      user.verified = false;
+      user.verificationExpiresAt = null;
+      if (typeof user.save === "function") {
+        await user.save();
+      } else {
+        await User.findByIdAndUpdate(user._id, { verified: false, verificationExpiresAt: null });
+      }
+    }
+  }
+  return user;
+};
 
 // Register a new user
 export const registerUser = async (req, res) => {
@@ -90,6 +109,9 @@ export const loginUser = async (req, res) => {
       { expiresIn: "7d" }
     );
 
+    // Check and refresh verification subscription status
+    await checkAndRefreshUserVerification(user);
+
     // Return user data without password
     const { password: _, ...userData } = user.toObject();
 
@@ -106,8 +128,9 @@ export const loginUser = async (req, res) => {
 
 export const getUserProfile = async (req, res) => {
   try {
-    const user = await User.findById(req.params.id).select("-password"); // exclude password
+    let user = await User.findById(req.params.id).select("-password"); // exclude password
     if (!user) return res.status(404).json({ message: "User not found" });
+    user = await checkAndRefreshUserVerification(user);
     res.json(user);
   } catch (error) {
     res.status(500).json({ message: "Server error", error: error.message });
@@ -119,15 +142,16 @@ export const getUserByUsername = async (req, res) => {
     const { username } = req.params;
 
     // Get the user by username + populate followers & following
-    const user = await User.findOne({ username })
+    let user = await User.findOne({ username })
       .select("-password")
-      .populate("followers", "username profilePicture")
-      .populate("following", "username profilePicture");
+      .populate("followers", "username profilePicture verified")
+      .populate("following", "username profilePicture verified");
 
     if (!user) {
       return res.status(404).json({ message: "User not found" });
     }
 
+    user = await checkAndRefreshUserVerification(user);
     res.json({ success: true, user });
 
   } catch (error) {
@@ -414,3 +438,170 @@ export const deleteBankAccount = async (req, res) => {
     res.status(500).json({ message: "Server error", error: error.message });
   }
 };
+
+// 🔵 MONTHLY VERIFICATION BADGE SUBSCRIPTION
+const VERIFICATION_MONTHLY_FEE = 1500; // ₦1,500 per month
+
+export const subscribeVerification = async (req, res) => {
+  try {
+    const userId = req.user.id;
+    const { paymentMethod = "balance", callbackUrl } = req.body; // "balance" | "paystack"
+
+    const user = await User.findById(userId);
+    if (!user) {
+      return res.status(404).json({ success: false, message: "User not found" });
+    }
+
+    // Refresh existing status if expired
+    await checkAndRefreshUserVerification(user);
+
+    // Option A: Pay directly from Huminer in-app account balance
+    if (paymentMethod === "balance") {
+      if ((user.accountBalance || 0) < VERIFICATION_MONTHLY_FEE) {
+        return res.status(400).json({
+          success: false,
+          insufficientBalance: true,
+          requiredAmount: VERIFICATION_MONTHLY_FEE,
+          balance: user.accountBalance || 0,
+          message: `Insufficient balance. Verification subscription is ₦${VERIFICATION_MONTHLY_FEE.toLocaleString()}/month. Please top up your wallet first or pay via Paystack.`
+        });
+      }
+
+      // Deduct balance
+      user.accountBalance -= VERIFICATION_MONTHLY_FEE;
+
+      // Extend expiration date by 30 days from now (or from previous expiration if already active)
+      const baseDate = user.verified && user.verificationExpiresAt && new Date(user.verificationExpiresAt) > new Date()
+        ? new Date(user.verificationExpiresAt)
+        : new Date();
+
+      const newExpiry = new Date(baseDate.getTime() + 30 * 24 * 60 * 60 * 1000);
+      user.verified = true;
+      user.verificationExpiresAt = newExpiry;
+
+      await user.save();
+
+      // Return clean user object without password
+      const userObj = user.toObject();
+      delete userObj.password;
+
+      return res.status(200).json({
+        success: true,
+        message: `Congratulations! Your account is verified until ${newExpiry.toLocaleDateString()}.`,
+        user: userObj,
+        verified: true,
+        verificationExpiresAt: newExpiry,
+        balance: user.accountBalance
+      });
+    }
+
+    // Option B: Pay via Paystack gateway
+    if (paymentMethod === "paystack") {
+      const secretKey = process.env.PAYSTACK_SECRET_KEY;
+      const reference = `VERIFY_${Date.now()}_${Math.floor(Math.random() * 1000)}`;
+      const userEmail = user.email || `${user.username}@huminer.com`;
+
+      let authorizationUrl = null;
+      let accessCode = null;
+
+      if (secretKey) {
+        try {
+          const origin = req.get("origin") || req.get("referer");
+          const safeCallback = callbackUrl || `${origin || "https://huminer.com"}/profile/${user.username}?verified_payment=true`;
+
+          const paystackRes = await axios.post(
+            "https://api.paystack.co/transaction/initialize",
+            {
+              email: userEmail,
+              amount: VERIFICATION_MONTHLY_FEE * 100, // in kobo
+              reference,
+              callback_url: safeCallback,
+              metadata: {
+                type: "verification_subscription",
+                userId: user._id.toString(),
+                username: user.username
+              }
+            },
+            {
+              headers: {
+                Authorization: `Bearer ${secretKey}`,
+                "Content-Type": "application/json"
+              }
+            }
+          );
+
+          if (paystackRes.data?.status && paystackRes.data?.data) {
+            accessCode = paystackRes.data.data.access_code;
+            authorizationUrl = paystackRes.data.data.authorization_url;
+          }
+        } catch (paystackErr) {
+          console.error("Paystack verification init error:", paystackErr.response?.data || paystackErr.message);
+        }
+      }
+
+      return res.status(200).json({
+        success: true,
+        reference,
+        accessCode,
+        authorizationUrl,
+        amount: VERIFICATION_MONTHLY_FEE,
+        email: userEmail,
+        publicKey: process.env.PAYSTACK_PUBLIC_KEY
+      });
+    }
+
+    return res.status(400).json({ success: false, message: "Invalid payment method" });
+  } catch (error) {
+    console.error("subscribeVerification error:", error);
+    return res.status(500).json({ success: false, message: error.message || "Failed to process verification subscription" });
+  }
+};
+
+// 🔵 VERIFY PAYSTACK PAYMENT FOR VERIFICATION SUBSCRIPTION
+export const verifyVerificationPayment = async (req, res) => {
+  try {
+    const { reference } = req.body;
+    const userId = req.user.id;
+
+    if (!reference) {
+      return res.status(400).json({ success: false, message: "Transaction reference is required" });
+    }
+
+    const secretKey = process.env.PAYSTACK_SECRET_KEY;
+    const response = await axios.get(`https://api.paystack.co/transaction/verify/${reference}`, {
+      headers: { Authorization: `Bearer ${secretKey}` }
+    });
+
+    const data = response.data?.data;
+    if (data?.status === "success") {
+      const user = await User.findById(userId);
+      if (!user) return res.status(404).json({ success: false, message: "User not found" });
+
+      const baseDate = user.verified && user.verificationExpiresAt && new Date(user.verificationExpiresAt) > new Date()
+        ? new Date(user.verificationExpiresAt)
+        : new Date();
+
+      const newExpiry = new Date(baseDate.getTime() + 30 * 24 * 60 * 60 * 1000);
+      user.verified = true;
+      user.verificationExpiresAt = newExpiry;
+      await user.save();
+
+      const userObj = user.toObject();
+      delete userObj.password;
+
+      return res.status(200).json({
+        success: true,
+        message: `Verification badge activated until ${newExpiry.toLocaleDateString()}!`,
+        user: userObj,
+        verified: true,
+        verificationExpiresAt: newExpiry
+      });
+    }
+
+    return res.status(400).json({ success: false, message: "Payment was not successful on Paystack" });
+  } catch (error) {
+    console.error("verifyVerificationPayment error:", error);
+    return res.status(500).json({ success: false, message: error.message || "Verification failed" });
+  }
+};
+
