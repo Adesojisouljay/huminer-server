@@ -505,6 +505,19 @@ export const handlePaystackWebhook = async (req, res) => {
         if (!reference) return res.sendStatus(200);
 
         if (event.event === "charge.success") {
+            const metadata = event.data?.metadata;
+            if (metadata?.type === "verification_subscription" && metadata?.userId) {
+                const user = await User.findById(metadata.userId);
+                if (user) {
+                    const baseDate = user.verified && user.verificationExpiresAt && new Date(user.verificationExpiresAt) > new Date()
+                        ? new Date(user.verificationExpiresAt)
+                        : new Date();
+                    user.verified = true;
+                    user.verificationExpiresAt = new Date(baseDate.getTime() + 30 * 24 * 60 * 60 * 1000);
+                    await user.save();
+                }
+                return res.sendStatus(200);
+            }
             await processSuccessfulDeposit(reference, event.data);
             return res.sendStatus(200);
         }

@@ -1,6 +1,21 @@
 import express from "express";
 import { authMiddleware } from "../middleware/inde.js";
-import { registerUser, loginUser, getUserProfile, getUserByUsername, updateUserProfile, getAllUsers, getRandomUsers, followUser, unfollowUser, claimRewards, addBankAccount, deleteBankAccount } from "../controllers/user.js";
+import {
+  registerUser,
+  loginUser,
+  getUserProfile,
+  getUserByUsername,
+  updateUserProfile,
+  getAllUsers,
+  getRandomUsers,
+  followUser,
+  unfollowUser,
+  claimRewards,
+  addBankAccount,
+  deleteBankAccount,
+  subscribeVerification,
+  verifyVerificationPayment,
+} from "../controllers/user.js";
 
 const router = express.Router();
 
@@ -17,5 +32,9 @@ router.put("/unfollow/:userId", authMiddleware, unfollowUser);
 router.post("/claim-rewards", authMiddleware, claimRewards);
 router.post("/add-bank", authMiddleware, addBankAccount);
 router.delete("/delete-bank/:bankId", authMiddleware, deleteBankAccount);
+
+// Monthly Verification Badge Subscription
+router.post("/subscribe-verification", authMiddleware, subscribeVerification);
+router.post("/verify-verification-payment", authMiddleware, verifyVerificationPayment);
 
 export default router;

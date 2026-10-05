@@ -32,6 +32,7 @@ const userSchema = new mongoose.Schema({
   following: [{ type: mongoose.Schema.Types.ObjectId, ref: "User" }],
   blockedUsers: [{ type: mongoose.Schema.Types.ObjectId, ref: "User" }],
   verified: { type: Boolean, default: false },
+  verificationExpiresAt: { type: Date, default: null },
   followersCount: { type: Number, default: 0 },
   followingCount: { type: Number, default: 0 },
 
