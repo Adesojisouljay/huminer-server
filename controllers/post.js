@@ -150,10 +150,17 @@ export const generatePostOpenGraphHtml = (post, req) => {
   let imageUrl = "https://huminer.adesojisouljay.com/logo512.png";
   if (imageMedia?.url) {
     imageUrl = imageMedia.url;
+    // WhatsApp crawler rejects images larger than 300KB or >1200px dimensions.
+    // If it's a Cloudinary URL, transform it to an optimized, fast-loading preview (max 800px width/height, auto quality)
+    if (imageUrl.includes("/upload/")) {
+      imageUrl = imageUrl.replace("/upload/", "/upload/w_800,c_limit,q_auto,f_jpg/");
+    }
   } else if (videoMedia?.url) {
-    // Cloudinary or similar thumbnail extraction if applicable
     if (videoMedia.url.includes("/upload/")) {
-      imageUrl = videoMedia.url.replace(/\.[^/.]+$/, ".jpg");
+      // Cloudinary video thumbnail poster: extract .jpg frame at w_800
+      imageUrl = videoMedia.url
+        .replace("/upload/", "/upload/w_800,c_limit,q_auto,f_jpg,so_0/")
+        .replace(/\.[^/.]+$/, ".jpg");
     } else {
       imageUrl = videoMedia.url;
     }
@@ -179,6 +186,9 @@ export const generatePostOpenGraphHtml = (post, req) => {
   <meta property="og:description" content="${escapeHtml(snippet)}" />
   <meta property="og:image" content="${escapeHtml(imageUrl)}" />
   <meta property="og:image:secure_url" content="${escapeHtml(imageUrl)}" />
+  <meta property="og:image:type" content="image/jpeg" />
+  <meta property="og:image:width" content="800" />
+  <meta property="og:image:height" content="600" />
   <meta property="og:image:alt" content="${escapeHtml(postTitle)}" />
   ${videoMedia ? `<meta property="og:video" content="${escapeHtml(videoMedia.url)}" />` : ""}
 
