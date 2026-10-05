@@ -244,21 +244,28 @@ export const saveLiveReplay = async (req, res) => {
     stream.hasReplay = true;
 
     // Optionally create a Post on feed
+    let createdPost = null;
     if (postToFeed) {
-      const post = new Post({
-        title: `🔴 Live Replay: ${stream.title}`,
-        body: `Recorded live broadcast with ${stream.peakViewers || stream.viewerCount || 0} viewers. Total tips: ₦${(stream.totalTips || 0).toLocaleString()}. Enjoy the replay!`,
-        media: [{ url: recordingUrl, type: "video" }],
-        userId: stream.host._id,
-        author: stream.host.username,
-        tags: ["live", "replay", "broadcast"],
-        payoutAt: new Date(Date.now() + 7 * 24 * 3600 * 1000),
-        isPaidOut: false,
-      });
+      if (!stream.post) {
+        createdPost = new Post({
+          title: `🔴 Live Replay: ${stream.title}`,
+          body: `Recorded live broadcast with ${stream.peakViewers || stream.viewerCount || 0} viewers. Total tips: ₦${(stream.totalTips || 0).toLocaleString()}. Enjoy the replay!`,
+          media: [{ url: recordingUrl, type: "video" }],
+          userId: stream.host._id,
+          author: stream.host.username,
+          tags: ["live", "replay", "broadcast"],
+          payoutAt: new Date(Date.now() + 7 * 24 * 3600 * 1000),
+          isPaidOut: false,
+        });
 
-      await post.save();
-      await User.findByIdAndUpdate(stream.host._id, { $push: { posts: post._id } });
-      stream.post = post._id;
+        await createdPost.save();
+        await User.findByIdAndUpdate(stream.host._id, { $push: { posts: createdPost._id } });
+        stream.post = createdPost._id;
+      } else {
+        await Post.findByIdAndUpdate(stream.post, {
+          media: [{ url: recordingUrl, type: "video" }],
+        });
+      }
     }
 
     await stream.save();
@@ -267,6 +274,8 @@ export const saveLiveReplay = async (req, res) => {
       success: true,
       message: "Live stream replay saved successfully",
       stream,
+      post: createdPost,
+      postId: createdPost?._id || stream.post,
     });
   } catch (error) {
     console.error("Save live replay error:", error);
