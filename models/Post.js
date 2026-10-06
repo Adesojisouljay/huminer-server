@@ -76,6 +76,12 @@ const postSchema = new mongoose.Schema(
     author: String,
     tags: [String],
 
+    // 🎵 Sound & Audio Attribution
+    audioTrackId: { type: mongoose.Schema.Types.ObjectId, ref: "AudioTrack", default: null },
+    audioTrackTitle: { type: String, default: null },
+    audioTrackArtist: { type: String, default: null },
+    audioTrackUrl: { type: String, default: null },
+
     tips: [tipSchema],
     totalTips: { type: Number, default: 0 },
     payoutAt: Date,
@@ -84,11 +90,17 @@ const postSchema = new mongoose.Schema(
     likes: [{ type: mongoose.Schema.Types.ObjectId, ref: "User" }], // 🟢 Likes
     reblogs: [{ type: mongoose.Schema.Types.ObjectId, ref: "User" }], // 🔁 Reblogs / Reshares
     saves: [{ type: mongoose.Schema.Types.ObjectId, ref: "User" }], // 🔖 Saved / Bookmarked
+    shares: { type: Number, default: 0 }, // 🔗 Share count (native share, copied link, external apps)
     views: { type: Number, default: 0 }, // 👁️ Views count
+    profileVisits: { type: Number, default: 0 }, // 👤 Profile visits generated from this post
+    followsEarned: [{ type: mongoose.Schema.Types.ObjectId, ref: "User" }], // ➕ Users who followed creator directly from this post
+    completions: { type: Number, default: 0 }, // 🎯 Video full completion / watch-through count
+    totalWatchSeconds: { type: Number, default: 0 }, // ⏱️ Total duration watched by audience
     viewedBy: [
       {
         userId: { type: mongoose.Schema.Types.ObjectId, ref: "User" },
-        lastViewedAt: { type: Date, default: Date.now }
+        lastViewedAt: { type: Date, default: Date.now },
+        completed: { type: Boolean, default: false }
       }
     ], // Viewers with timestamp for cooldown
 

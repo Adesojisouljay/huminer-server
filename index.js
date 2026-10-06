@@ -19,6 +19,7 @@ import stakingRoutes from "./routes/stakingRoute.js";
 import walletRoutes from "./routes/walletRoute.js";
 import storyRoute from "./routes/storyRoute.js";
 import liveRoute from "./routes/liveRoute.js";
+import audioRoute from "./routes/audioRoute.js";
 import { handleWalletCallback } from "./controllers/payment.js";
 import { renderPostSharePreview } from "./controllers/post.js";
 
@@ -59,6 +60,7 @@ app.use("/api/staking", stakingRoutes);
 app.use("/api/wallet", walletRoutes);
 app.use("/api/stories", storyRoute);
 app.use("/api/live", liveRoute);
+app.use("/api/audio", audioRoute);
 
 server.listen(PORT, () => {
   console.log(`Music platfrom is running on port ${PORT}`);

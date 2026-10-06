@@ -1,4 +1,5 @@
 import User from "../models/User.js";
+import Post from "../models/Post.js";
 import bcrypt from "bcrypt";
 import jwt from "jsonwebtoken";
 import axios from "axios";
@@ -271,6 +272,17 @@ export const followUser = async (req, res) => {
         message: `${currentUser.username} started following you`
       });
 
+      // 📈 Attribution: if followed via a specific post, attribute follow to that post
+      const sourcePostId = req.body?.postId;
+      if (sourcePostId) {
+        try {
+          await Post.findByIdAndUpdate(sourcePostId, {
+            $addToSet: { followsEarned: currentUser._id }
+          });
+        } catch (postAttrErr) {
+          console.warn("Could not attribute follow to post:", postAttrErr.message);
+        }
+      }
     }
 
     const updatedUser = await User.findById(id).select("-password");
@@ -660,4 +672,166 @@ export const verifyVerificationPayment = async (req, res) => {
     return res.status(500).json({ success: false, message: error.message || "Verification failed" });
   }
 };
+
+// 🚫 BLOCK USER
+export const blockUser = async (req, res) => {
+  try {
+    const currentUserId = req.user.id;
+    const targetUserId = req.params.userId;
+
+    if (currentUserId.toString() === targetUserId.toString()) {
+      return res.status(400).json({ success: false, message: "You cannot block yourself" });
+    }
+
+    const targetUser = await User.findById(targetUserId);
+    if (!targetUser) {
+      return res.status(404).json({ success: false, message: "User not found" });
+    }
+
+    // Add to blockedUsers and remove from followers/following mutually
+    await User.findByIdAndUpdate(currentUserId, {
+      $addToSet: { blockedUsers: targetUserId },
+      $pull: { following: targetUserId, followers: targetUserId }
+    });
+
+    await User.findByIdAndUpdate(targetUserId, {
+      $pull: { following: currentUserId, followers: currentUserId }
+    });
+
+    return res.status(200).json({
+      success: true,
+      message: `You have blocked @${targetUser.username}. They cannot message you or see your content.`
+    });
+  } catch (error) {
+    console.error("blockUser error:", error);
+    return res.status(500).json({ success: false, message: "Server error blocking user" });
+  }
+};
+
+// 🟢 UNBLOCK USER
+export const unblockUser = async (req, res) => {
+  try {
+    const currentUserId = req.user.id;
+    const targetUserId = req.params.userId;
+
+    await User.findByIdAndUpdate(currentUserId, {
+      $pull: { blockedUsers: targetUserId }
+    });
+
+    return res.status(200).json({
+      success: true,
+      message: "User unblocked successfully"
+    });
+  } catch (error) {
+    console.error("unblockUser error:", error);
+    return res.status(500).json({ success: false, message: "Server error unblocking user" });
+  }
+};
+
+// 📋 GET BLOCKED USERS LIST
+export const getBlockedUsers = async (req, res) => {
+  try {
+    const user = await User.findById(req.user.id)
+      .populate("blockedUsers", "username fullName profilePicture verified");
+
+    if (!user) {
+      return res.status(404).json({ success: false, message: "User not found" });
+    }
+
+    return res.status(200).json({
+      success: true,
+      blockedUsers: user.blockedUsers || []
+    });
+  } catch (error) {
+    console.error("getBlockedUsers error:", error);
+    return res.status(500).json({ success: false, message: "Server error fetching blocked users" });
+  }
+};
+
+// 🛡️ SUBMIT UGC REPORT (App Store / Play Store compliance)
+export const submitReport = async (req, res) => {
+  try {
+    const reporterId = req.user.id;
+    const reporter = await User.findById(reporterId);
+    const { targetType, targetId, targetUsername, reason, details } = req.body;
+
+    if (!targetType || !targetId || !reason) {
+      return res.status(400).json({
+        success: false,
+        message: "targetType, targetId, and reason are required"
+      });
+    }
+
+    // Dynamic import to avoid circular dependency
+    const Report = (await import("../models/Report.js")).default;
+
+    const newReport = new Report({
+      reporterId,
+      reporterUsername: reporter?.username || "anonymous",
+      targetType,
+      targetId,
+      targetUsername: targetUsername || null,
+      reason,
+      details: details ? details.trim() : ""
+    });
+
+    await newReport.save();
+
+    return res.status(201).json({
+      success: true,
+      message: "Thank you for helping keep Huminer safe. Our trust & safety team will review this report within 24 hours."
+    });
+  } catch (error) {
+    console.error("submitReport error:", error);
+    return res.status(500).json({ success: false, message: "Server error submitting report" });
+  }
+};
+
+// 📱 REGISTER PUSH DEVICE TOKEN (FCM / Web Push / Capacitor)
+export const registerDeviceToken = async (req, res) => {
+  try {
+    const userId = req.user.id;
+    const { token } = req.body;
+
+    if (!token) {
+      return res.status(400).json({ success: false, message: "Token is required" });
+    }
+
+    await User.findByIdAndUpdate(userId, {
+      $addToSet: { fcmTokens: token }
+    });
+
+    return res.status(200).json({
+      success: true,
+      message: "Device push token registered successfully"
+    });
+  } catch (error) {
+    console.error("registerDeviceToken error:", error);
+    return res.status(500).json({ success: false, message: "Server error registering token" });
+  }
+};
+
+// ⚙️ UPDATE PUSH NOTIFICATION PREFERENCES
+export const updatePushSettings = async (req, res) => {
+  try {
+    const userId = req.user.id;
+    const { enabled } = req.body;
+
+    const user = await User.findByIdAndUpdate(
+      userId,
+      { $set: { "settings.pushNotifications": Boolean(enabled) } },
+      { new: true }
+    );
+
+    return res.status(200).json({
+      success: true,
+      pushNotifications: user?.settings?.pushNotifications ?? true
+    });
+  } catch (error) {
+    console.error("updatePushSettings error:", error);
+    return res.status(500).json({ success: false, message: "Server error updating push preferences" });
+  }
+};
+
+
 

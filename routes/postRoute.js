@@ -21,19 +21,31 @@ import {
   savePost,
   getRebloggedPosts,
   getSavedPosts,
-  recordPostView
+  recordPostView,
+  globalSearch,
+  getExploreFeed,
+  recordPostShare,
+  recordProfileVisit,
+  getPostInsights,
+  getCreatorStudioAnalytics
 } from "../controllers/post.js";
-import { authMiddleware } from "../middleware/inde.js";
+import { authMiddleware, optionalAuthMiddleware } from "../middleware/inde.js";
 
 const router = express.Router();
 
 router.post("/", authMiddleware, createPost); // create
-router.get("/", getPosts); // feed (all posts, with optional ?tag=)
+router.get("/creator-studio/analytics", authMiddleware, getCreatorStudioAnalytics); // 📈 Creator Studio performance & monetization
+router.get("/", optionalAuthMiddleware, getPosts); // feed (all posts, with optional ?tag=)
+router.get("/search", optionalAuthMiddleware, globalSearch); // 🔍 Global search (accounts, posts, tags)
+router.get("/explore", optionalAuthMiddleware, getExploreFeed); // 🧭 Engagement-ranked explore feed
 router.get("/tags/trending", getTrendingTags); // 🟢 NEW: Hashtag stats
 router.get("/following", authMiddleware, getFollowingPosts); // 🟢 NEW: Following feed
 router.get("/saved", authMiddleware, getSavedPosts); // 🔖 Saved posts for active user
 router.get("/archived", authMiddleware, getArchivedPosts); // 📦 Archived posts for active user
 router.get("/reblogged/:username", getRebloggedPosts); // 🔁 Reblogged posts for a user
+router.get("/:id/insights", authMiddleware, getPostInsights); // 📊 Post-level metrics & completion drawer
+router.post("/:id/share", recordPostShare); // 🔗 Record post share
+router.post("/:id/profile-visit", recordProfileVisit); // 👤 Record profile visit originating from post
 router.get("/:id", getPostById); // single post
 router.put("/:id/view", recordPostView); // 👁️ Record view
 router.put("/:id/like", authMiddleware, likePost); // 🟢 Like post

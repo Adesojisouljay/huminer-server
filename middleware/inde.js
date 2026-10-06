@@ -25,3 +25,21 @@ export const authMiddleware = async (req, res, next) => {
     return res.status(401).json({ message: "Not authorized, no token" });
   }
 };
+
+// Optional auth middleware: extracts user if token provided, but doesn't block if absent/invalid
+export const optionalAuthMiddleware = async (req, res, next) => {
+  if (req.headers.authorization && req.headers.authorization.startsWith("Bearer")) {
+    try {
+      const token = req.headers.authorization.split(" ")[1];
+      const decoded = jwt.verify(token, process.env.JWT_SECRET);
+      const user = await User.findById(decoded.id).select("id username email blockedUsers");
+      if (user) {
+        req.user = user;
+      }
+    } catch (error) {
+      // Ignore token failure for public routes
+    }
+  }
+  next();
+};
+

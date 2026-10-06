@@ -84,6 +84,31 @@ export const sendMessage = async (req, res) => {
       }
     }
 
+    // 🛡️ Block enforcement for 1-on-1 chats
+    if (!chat.isGroup) {
+      const otherParticipantId = chat.participants.find(
+        (p) => (p._id || p).toString() !== senderId.toString()
+      );
+      if (otherParticipantId) {
+        const User = (await import("../models/User.js")).default;
+        const otherUser = await User.findById(otherParticipantId).select("blockedUsers");
+        const senderUser = await User.findById(senderId).select("blockedUsers");
+
+        const isSenderBlockedByOther = otherUser?.blockedUsers?.some(
+          (bId) => bId.toString() === senderId.toString()
+        );
+        const hasSenderBlockedOther = senderUser?.blockedUsers?.some(
+          (bId) => bId.toString() === otherParticipantId.toString()
+        );
+
+        if (isSenderBlockedByOther || hasSenderBlockedOther) {
+          return res.status(403).json({
+            message: "Cannot send message. You or the other user has blocked communication.",
+          });
+        }
+      }
+    }
+
     const newMessage = {
       sender: senderId,
       text: text || "",
