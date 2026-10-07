@@ -123,3 +123,93 @@ export const sendIncomingCallPush = async ({
     console.error("Error sending incoming call push:", err);
   }
 };
+
+/**
+ * Dispatch generic push notification to a user's devices (Tips, Live broadcasts, Mentions, Likes, Comments)
+ */
+export const sendPushNotification = async ({
+  toUserId,
+  title,
+  body,
+  data = {},
+  icon = "https://huminer.adesojisouljay.com/logo512.png"
+}) => {
+  try {
+    const recipient = await User.findById(toUserId).select("fcmTokens username settings");
+    if (!recipient) return;
+
+    // Check if user has disabled push notifications in their settings
+    if (recipient.settings?.pushNotifications === false) {
+      return;
+    }
+
+    if (!recipient.fcmTokens || recipient.fcmTokens.length === 0) {
+      return;
+    }
+
+    if (!isInitialized || !firebaseAdmin) {
+      return;
+    }
+
+    const stringData = {};
+    Object.entries(data).forEach(([k, v]) => {
+      stringData[k] = v !== null && v !== undefined ? String(v) : "";
+    });
+
+    const message = {
+      tokens: recipient.fcmTokens,
+      data: stringData,
+      notification: {
+        title,
+        body,
+      },
+      android: {
+        priority: "high",
+        notification: {
+          title,
+          body,
+          icon: "ic_notification",
+          color: "#ffd700",
+          sound: "default",
+          priority: "high",
+        },
+      },
+      apns: {
+        payload: {
+          aps: {
+            alert: { title, body },
+            sound: "default",
+            badge: 1,
+          },
+        },
+      },
+    };
+
+    const response = await firebaseAdmin.messaging().sendEachForMulticast(message);
+    console.log(`🔥 [Push] Push sent to user ${toUserId} (${title}): ${response.successCount} success`);
+
+    // Clean up expired tokens
+    if (response.failureCount > 0) {
+      const badTokens = [];
+      response.responses.forEach((resp, idx) => {
+        if (!resp.success) {
+          const errCode = resp.error?.code;
+          if (
+            errCode === "messaging/invalid-registration-token" ||
+            errCode === "messaging/registration-token-not-registered"
+          ) {
+            badTokens.push(recipient.fcmTokens[idx]);
+          }
+        }
+      });
+      if (badTokens.length > 0) {
+        await User.findByIdAndUpdate(toUserId, {
+          $pull: { fcmTokens: { $in: badTokens } },
+        });
+      }
+    }
+  } catch (err) {
+    console.error("sendPushNotification error:", err);
+  }
+};
+

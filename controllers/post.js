@@ -1,12 +1,13 @@
 import Post from "../models/Post.js";
 import User from "../models/User.js";
+import AudioTrack from "../models/AudioTrack.js";
 import { createNotification } from "../helpers/index.js";
 
 // CREATE a new post
 export const createPost = async (req, res) => {
   try {
-    const { title, body, media, tags } = req.body;
-    console.log({ title, body, media, tags })
+    const { title, body, media, tags, audioTrackId, audioTrackTitle, audioTrackArtist, audioTrackUrl } = req.body;
+    console.log({ title, body, media, tags, audioTrackId });
 
     if (!title || !body) {
       return res.status(400).json({ success: false, message: "Title and body are required" });
@@ -23,6 +24,31 @@ export const createPost = async (req, res) => {
 
     const mergedTags = Array.from(new Set([...bodyMatches, ...explicitTags]));
 
+    // Determine Sound / Audio Attribution
+    let resolvedAudioTrackId = audioTrackId || null;
+    let resolvedAudioTrackTitle = audioTrackTitle || null;
+    let resolvedAudioTrackArtist = audioTrackArtist || null;
+    let resolvedAudioTrackUrl = audioTrackUrl || null;
+
+    if (resolvedAudioTrackId) {
+      // Increment existing track usage count
+      AudioTrack.findByIdAndUpdate(resolvedAudioTrackId, { $inc: { usageCount: 1 } }).catch(err =>
+        console.warn("AudioTrack increment error:", err)
+      );
+    } else {
+      // Check if media contains audio or video with sound to register UGC sound identity
+      const mediaList = Array.isArray(media) ? media : [];
+      const audioMedia = mediaList.find(m => m.type === "audio");
+      const videoMedia = mediaList.find(m => m.type === "video");
+      const soundSource = audioMedia || videoMedia;
+
+      if (soundSource?.url) {
+        resolvedAudioTrackTitle = `Original Audio - @${req.user.username}`;
+        resolvedAudioTrackArtist = `@${req.user.username}`;
+        resolvedAudioTrackUrl = soundSource.url;
+      }
+    }
+
     const newPost = new Post({
       title,
       body,
@@ -30,11 +56,61 @@ export const createPost = async (req, res) => {
       userId: req.user.id,        // from authMiddleware
       author: req.user.username, // cached for faster queries
       tags: mergedTags,
+      audioTrackId: resolvedAudioTrackId,
+      audioTrackTitle: resolvedAudioTrackTitle,
+      audioTrackArtist: resolvedAudioTrackArtist,
+      audioTrackUrl: resolvedAudioTrackUrl,
       payoutAt: new Date(Date.now() + 7 * 24 * 3600 * 1000),
       totalTips: 0,
     });
 
     const savedPost = await newPost.save();
+
+    // If post created a new UGC sound identity and track ID wasn't provided, register AudioTrack record
+    if (!resolvedAudioTrackId && resolvedAudioTrackUrl) {
+      AudioTrack.create({
+        title: resolvedAudioTrackTitle,
+        artist: resolvedAudioTrackArtist,
+        audioUrl: resolvedAudioTrackUrl,
+        category: "ugc",
+        creatorId: req.user.id,
+        creatorUsername: req.user.username,
+        originalPostId: savedPost._id,
+        usageCount: 1
+      }).then(track => {
+        Post.findByIdAndUpdate(savedPost._id, { audioTrackId: track._id }).catch(() => {});
+      }).catch(err => console.warn("UGC sound creation error:", err));
+    }
+
+    // 🔔 Notify @mentioned users in post body
+    const rawPostMatches = (body.match(/@([a-zA-Z0-9_]+)/g) || []);
+    const mentionedUsernames = Array.from(
+      new Set(rawPostMatches.map((m) => m.slice(1).trim()).filter(Boolean))
+    ).filter((u) => u.toLowerCase() !== req.user.username?.toLowerCase());
+
+    if (mentionedUsernames.length > 0) {
+      const regexQueries = mentionedUsernames.map(
+        (name) => new RegExp(`^${name}$`, "i")
+      );
+
+      User.find({ username: { $in: regexQueries } })
+        .select("_id username")
+        .then((users) => {
+          users.forEach((mentioned) => {
+            createNotification({
+              userId: mentioned._id,
+              type: "mention",
+              postId: savedPost._id,
+              fromUserId: req.user.id,
+              fromUsername: req.user.username,
+              fromProfilePicture: req.user.profilePicture || "",
+              message: `@${req.user.username} mentioned you in a post: "${savedPost.title}"`,
+            }).catch((e) => console.warn("Mention alert error:", e));
+          });
+        })
+        .catch((e) => console.warn("Mention query error:", e));
+    }
+
     res.status(201).json({ success: true, post: savedPost });
   } catch (err) {
     console.error("CreatePost Error:", err);
@@ -46,9 +122,12 @@ export const createPost = async (req, res) => {
 export const getPosts = async (req, res) => {
   try {
     const { tag, sort } = req.query;
+    const blockedList = req.user?.blockedUsers || [];
+
     const query = {
       isArchived: { $ne: true },
-      ...(tag ? { tags: tag.toLowerCase() } : {})
+      ...(tag ? { tags: tag.toLowerCase() } : {}),
+      ...(blockedList.length > 0 ? { userId: { $nin: blockedList } } : {})
     };
 
     // Allow explicit reverse-chronological sorting if requested
@@ -97,10 +176,11 @@ export const getPosts = async (req, res) => {
 export const getTrendingTags = async (req, res) => {
   try {
     const stats = await Post.aggregate([
+      { $match: { isArchived: { $ne: true } } },
       { $unwind: "$tags" },
       { $group: { _id: "$tags", count: { $sum: 1 } } },
       { $sort: { count: -1 } },
-      { $limit: 15 },
+      { $limit: 25 },
       { $project: { tag: "$_id", count: 1, _id: 0 } }
     ]);
 
@@ -108,6 +188,123 @@ export const getTrendingTags = async (req, res) => {
   } catch (err) {
     console.error("GetTrendingTags Error:", err.message);
     res.status(500).json({ success: false, message: "Server error fetching hashtags" });
+  }
+};
+
+// 🔍 GLOBAL SEARCH (Users, Posts/Videos, Hashtags)
+export const globalSearch = async (req, res) => {
+  try {
+    const rawQuery = (req.query.q || "").trim();
+    const type = req.query.type || "all"; // "all" | "users" | "posts" | "tags"
+
+    if (!rawQuery) {
+      return res.status(200).json({
+        success: true,
+        users: [],
+        posts: [],
+        tags: []
+      });
+    }
+
+    const cleanTag = rawQuery.replace(/^#/, "").toLowerCase();
+    const searchRegex = new RegExp(rawQuery.replace(/[.*+?^${}()|[\]\\]/g, "\\$&"), "i");
+
+    let users = [];
+    let posts = [];
+    let tags = [];
+
+    // Search Users
+    if (type === "all" || type === "users") {
+      users = await User.find({
+        $or: [
+          { username: searchRegex },
+          { fullName: searchRegex },
+          { email: searchRegex }
+        ]
+      })
+        .select("username fullName email profilePicture verified followers following bio")
+        .limit(15);
+    }
+
+    // Search Posts
+    if (type === "all" || type === "posts") {
+      posts = await Post.find({
+        isArchived: { $ne: true },
+        $or: [
+          { title: searchRegex },
+          { body: searchRegex },
+          { author: searchRegex },
+          { tags: cleanTag }
+        ]
+      })
+        .populate("userId", "username email profilePicture verified verificationExpiresAt")
+        .sort({ createdAt: -1 })
+        .limit(30);
+    }
+
+    // Search Tags
+    if (type === "all" || type === "tags") {
+      const tagStats = await Post.aggregate([
+        { $match: { isArchived: { $ne: true } } },
+        { $unwind: "$tags" },
+        { $match: { tags: new RegExp(cleanTag, "i") } },
+        { $group: { _id: "$tags", count: { $sum: 1 } } },
+        { $sort: { count: -1 } },
+        { $limit: 15 },
+        { $project: { tag: "$_id", count: 1, _id: 0 } }
+      ]);
+      tags = tagStats;
+    }
+
+    res.status(200).json({
+      success: true,
+      query: rawQuery,
+      users,
+      posts,
+      tags
+    });
+  } catch (err) {
+    console.error("GlobalSearch Error:", err);
+    res.status(500).json({ success: false, message: "Server error executing search" });
+  }
+};
+
+// 🌟 EXPLORE DISCOVERY FEED (Trending & viral posts grid)
+export const getExploreFeed = async (req, res) => {
+  try {
+    const blockedList = req.user?.blockedUsers || [];
+    const filter = {
+      isArchived: { $ne: true },
+      ...(blockedList.length > 0 ? { userId: { $nin: blockedList } } : {})
+    };
+
+    const posts = await Post.find(filter)
+      .populate("userId", "username email profilePicture verified verificationExpiresAt")
+      .limit(60);
+
+    // Score and rank posts by engagement (tips, comments, likes, views) with freshness weight
+    const scored = posts.map((post) => {
+      const tipsCount = post.tips?.length || 0;
+      const likesCount = post.likes?.length || 0;
+      const commentsCount = post.comments?.length || 0;
+      const viewsCount = post.views || 0;
+
+      // Higher weight for tips and comments, plus visual media preference
+      const hasMedia = (post.media?.length || 0) > 0 ? 5 : 0;
+      const score = (tipsCount * 6) + (commentsCount * 3) + (likesCount * 2) + (viewsCount * 0.1) + hasMedia + (Math.random() * 4);
+
+      return { post, score };
+    });
+
+    scored.sort((a, b) => b.score - a.score);
+
+    res.status(200).json({
+      success: true,
+      posts: scored.map((s) => s.post)
+    });
+  } catch (err) {
+    console.error("GetExploreFeed Error:", err);
+    res.status(500).json({ success: false, message: "Server error fetching explore feed" });
   }
 };
 
@@ -265,7 +462,7 @@ export const renderPostSharePreview = async (req, res) => {
 export const recordPostView = async (req, res) => {
   try {
     const { id } = req.params;
-    const { userId } = req.body;
+    const { userId, completed = false, watchSeconds = 0 } = req.body;
 
     const post = await Post.findById(id);
     if (!post) {
@@ -278,12 +475,24 @@ export const recordPostView = async (req, res) => {
       return res.status(200).json({ success: true, views: post.views || 0, isAuthor: true });
     }
 
-    // 2. Ensure viewedBy and views are initialized
+    // 2. Ensure viewedBy, views, completions and watch duration are initialized
     if (!Array.isArray(post.viewedBy)) {
       post.viewedBy = [];
     }
     if (typeof post.views !== "number") {
       post.views = 0;
+    }
+    if (typeof post.completions !== "number") {
+      post.completions = 0;
+    }
+    if (typeof post.totalWatchSeconds !== "number") {
+      post.totalWatchSeconds = 0;
+    }
+
+    // Accumulate valid watch duration (cap at reasonable 3600 seconds to prevent spoofing)
+    const validWatchSecs = Math.min(Math.max(0, Number(watchSeconds) || 0), 3600);
+    if (validWatchSecs > 0) {
+      post.totalWatchSeconds += validWatchSecs;
     }
 
     // 3. Cooldown window: 3 minutes (180,000 ms)
@@ -302,11 +511,21 @@ export const recordPostView = async (req, res) => {
           ? new Date(existingEntry.lastViewedAt).getTime()
           : 0;
 
-        // If viewed within cooldown period, ignore and do not increment
+        // If newly marked completed
+        if (completed && !existingEntry.completed) {
+          existingEntry.completed = true;
+          post.completions += 1;
+        }
+
+        // If viewed within cooldown period, ignore view increment but save watch/completion updates
         if (Date.now() - lastViewedAt < VIEW_COOLDOWN_MS) {
+          if (validWatchSecs > 0 || (completed && !existingEntry.completed)) {
+            await post.save();
+          }
           return res.status(200).json({
             success: true,
             views: post.views,
+            completions: post.completions,
             cooldown: true,
             remainingSeconds: Math.ceil((VIEW_COOLDOWN_MS - (Date.now() - lastViewedAt)) / 1000)
           });
@@ -315,26 +534,42 @@ export const recordPostView = async (req, res) => {
         // Cooldown passed: record fresh view and update timestamp
         post.viewedBy[viewerIndex] = {
           userId,
-          lastViewedAt: now
+          lastViewedAt: now,
+          completed: completed || Boolean(existingEntry.completed)
         };
         post.views += 1;
+        if (completed && !existingEntry.completed) {
+          post.completions += 1;
+        }
         await post.save();
       } else {
         // First view by this user
         post.viewedBy.push({
           userId,
-          lastViewedAt: now
+          lastViewedAt: now,
+          completed: Boolean(completed)
         });
         post.views += 1;
+        if (completed) {
+          post.completions += 1;
+        }
         await post.save();
       }
     } else {
       // Unauthenticated viewer
       post.views += 1;
+      if (completed) {
+        post.completions += 1;
+      }
       await post.save();
     }
 
-    res.status(200).json({ success: true, views: post.views });
+    res.status(200).json({
+      success: true,
+      views: post.views,
+      completions: post.completions,
+      totalWatchSeconds: post.totalWatchSeconds
+    });
   } catch (err) {
     console.error("recordPostView Error:", err.message);
     res.status(500).json({ success: false, message: "Server error recording view" });
@@ -789,18 +1024,50 @@ export const addComment = async (req, res) => {
 
       post.comments.push(newComment);
       await post.save();
+      await post.populate("userId", "username email profilePicture verified verificationExpiresAt");
+      await post.populate("comments.userId", "username email profilePicture verified");
 
       // Notify the post owner (if the commenter is not the post owner)
-      if (sender.id !== post.userId.toString()) {
-        await createNotification({
-          userId: post.userId,
+      const postOwnerId = (post.userId?._id || post.userId)?.toString();
+      if (postOwnerId && sender.id !== postOwnerId) {
+        createNotification({
+          userId: postOwnerId,
           type: "comment",
           postId,
           fromUserId: sender.id,
           fromUsername: sender.username,
           fromProfilePicture: sender.profilePicture,
           message: `${sender.username} commented on your post`,
-        });
+        }).catch((e) => console.warn("Comment notification failed:", e));
+      }
+
+      // 🔔 Notify any @mentioned users in the comment
+      const rawMatches = content.match(/@([a-zA-Z0-9_]+)/g) || [];
+      const mentionedUsernames = Array.from(
+        new Set(rawMatches.map((m) => m.slice(1).trim()).filter(Boolean))
+      ).filter((u) => u.toLowerCase() !== sender.username?.toLowerCase());
+
+      if (mentionedUsernames.length > 0) {
+        const regexQueries = mentionedUsernames.map(
+          (name) => new RegExp(`^${name}$`, "i")
+        );
+
+        User.find({ username: { $in: regexQueries } })
+          .select("_id username")
+          .then((users) => {
+            users.forEach((mentioned) => {
+              createNotification({
+                userId: mentioned._id,
+                type: "mention",
+                postId: post._id,
+                fromUserId: sender.id,
+                fromUsername: sender.username,
+                fromProfilePicture: sender.profilePicture || "",
+                message: `@${sender.username} mentioned you in a comment: "${content}"`,
+              }).catch((e) => console.warn("Mention alert error:", e));
+            });
+          })
+          .catch((e) => console.warn("Mention query error:", e));
       }
 
       return res.status(201).json({ success: true, post });
@@ -842,20 +1109,49 @@ export const addComment = async (req, res) => {
     parentComment.children.push(newReply);
 
     await post.save();
+    await post.populate("userId", "username email profilePicture verified verificationExpiresAt");
+    await post.populate("comments.userId", "username email profilePicture verified");
 
     // ------------------------------
     // Create notification to the user
     // ------------------------------
-    if (sender.id !== targetComment.userId.toString()) {
-      await createNotification({
-        userId: targetComment.userId,      // recipient
+    const targetAuthorId = (targetComment.userId?._id || targetComment.userId)?.toString();
+    if (targetAuthorId && sender.id !== targetAuthorId) {
+      createNotification({
+        userId: targetAuthorId,      // recipient
         type: "reply",
         postId,
         commentId: targetComment._id,
         fromUserId: sender.id,
         fromUsername: sender.username,
         message: `${sender.username} replied to your comment: "${replyText}"`,
-      });
+      }).catch((e) => console.warn("Reply notification failed:", e));
+    }
+
+    // 🔔 Notify any @mentioned users in the reply
+    const rawReplyMatches = content.match(/@([a-zA-Z0-9_]+)/g) || [];
+    const replyMentions = Array.from(
+      new Set(rawReplyMatches.map((m) => m.slice(1).trim()).filter(Boolean))
+    ).filter((u) => u.toLowerCase() !== sender.username?.toLowerCase() && u.toLowerCase() !== (targetComment.commentAuthor || "").toLowerCase());
+
+    if (replyMentions.length > 0) {
+      const regexQueries = replyMentions.map((name) => new RegExp(`^${name}$`, "i"));
+      User.find({ username: { $in: regexQueries } })
+        .select("_id username")
+        .then((users) => {
+          users.forEach((mentioned) => {
+            createNotification({
+              userId: mentioned._id,
+              type: "mention",
+              postId: post._id,
+              fromUserId: sender.id,
+              fromUsername: sender.username,
+              fromProfilePicture: sender.profilePicture || "",
+              message: `@${sender.username} mentioned you in a comment: "${content}"`,
+            }).catch((e) => console.warn("Mention alert error:", e));
+          });
+        })
+        .catch((e) => console.warn("Mention query error:", e));
     }
 
     res.status(201).json({ success: true, post });
@@ -1258,5 +1554,358 @@ export const getSavedPosts = async (req, res) => {
   } catch (err) {
     console.error("GetSavedPosts Error:", err.message);
     res.status(500).json({ success: false, message: "Server error fetching saved posts" });
+  }
+};
+
+// 🔗 RECORD POST SHARE
+export const recordPostShare = async (req, res) => {
+  try {
+    const { id } = req.params;
+    const post = await Post.findByIdAndUpdate(
+      id,
+      { $inc: { shares: 1 } },
+      { new: true }
+    );
+
+    if (!post) {
+      return res.status(404).json({ success: false, message: "Post not found" });
+    }
+
+    res.status(200).json({
+      success: true,
+      shares: post.shares || 0
+    });
+  } catch (err) {
+    console.error("recordPostShare Error:", err.message);
+    res.status(500).json({ success: false, message: "Server error recording share" });
+  }
+};
+
+// 👤 RECORD PROFILE VISIT ATTRIBUTED TO POST
+export const recordProfileVisit = async (req, res) => {
+  try {
+    const { id } = req.params;
+    const post = await Post.findByIdAndUpdate(
+      id,
+      { $inc: { profileVisits: 1 } },
+      { new: true }
+    );
+
+    if (!post) {
+      return res.status(404).json({ success: false, message: "Post not found" });
+    }
+
+    res.status(200).json({
+      success: true,
+      profileVisits: post.profileVisits || 0
+    });
+  } catch (err) {
+    console.error("recordProfileVisit Error:", err.message);
+    res.status(500).json({ success: false, message: "Server error recording profile visit" });
+  }
+};
+
+// 📊 GET POST-LEVEL INSIGHTS (Author Only)
+export const getPostInsights = async (req, res) => {
+  try {
+    const { id } = req.params;
+    const requesterId = req.user.id;
+
+    const post = await Post.findById(id).populate("userId", "username profilePicture");
+    if (!post) {
+      return res.status(404).json({ success: false, message: "Post not found" });
+    }
+
+    const postAuthorId = (post.userId?._id || post.userId)?.toString();
+    if (postAuthorId !== requesterId.toString()) {
+      return res.status(403).json({
+        success: false,
+        message: "Only the post author can view performance insights"
+      });
+    }
+
+    const totalViews = post.views || 0;
+    const uniqueViewers = Array.isArray(post.viewedBy) ? post.viewedBy.length : 0;
+    const totalCompletions = post.completions || 0;
+    const completionRate = totalViews > 0
+      ? Math.min(100, Math.round((totalCompletions / totalViews) * 100))
+      : 0;
+
+    const totalTipsNGN = Array.isArray(post.tips)
+      ? post.tips.reduce((acc, t) => acc + (t.currency === "NGN" ? (Number(t.amount) || 0) : 0), 0)
+      : (post.totalTips || 0);
+
+    const totalTipsUSDT = Array.isArray(post.tips)
+      ? post.tips.reduce((acc, t) => acc + (t.currency === "USDT" ? (Number(t.amount) || 0) : 0), 0)
+      : 0;
+
+    const totalTipsBTC = Array.isArray(post.tips)
+      ? post.tips.reduce((acc, t) => acc + (t.currency === "BTC" ? (Number(t.amount) || 0) : 0), 0)
+      : 0;
+
+    // Build tip transactions list sorted latest first
+    const tipTransactions = Array.isArray(post.tips)
+      ? [...post.tips].sort((a, b) => new Date(b.createdAt) - new Date(a.createdAt))
+      : [];
+
+    const likesCount = Array.isArray(post.likes) ? post.likes.length : 0;
+    const commentsCount = Array.isArray(post.comments) ? post.comments.length : 0;
+    const reblogsCount = Array.isArray(post.reblogs) ? post.reblogs.length : 0;
+    const savesCount = Array.isArray(post.saves) ? post.saves.length : 0;
+    const sharesCount = post.shares || 0;
+    const totalWatchSeconds = post.totalWatchSeconds || 0;
+
+    // Engagement Rate = (likes + comments + saves + shares + reblogs) / views
+    const totalEngagements = likesCount + commentsCount + savesCount + sharesCount + reblogsCount;
+    const engagementRate = totalViews > 0
+      ? Math.min(100, Math.round((totalEngagements / totalViews) * 1000) / 10)
+      : 0;
+
+    res.status(200).json({
+      success: true,
+      insights: {
+        postId: post._id,
+        title: post.title || "",
+        createdAt: post.createdAt,
+        totalViews,
+        uniqueViewers,
+        completions: totalCompletions,
+        completionRate,
+        totalWatchSeconds,
+        averageWatchSeconds: totalViews > 0 ? Math.round(totalWatchSeconds / totalViews) : 0,
+        totalTipsNGN,
+        totalTipsUSDT,
+        totalTipsBTC,
+        tipTransactions,
+        likesCount,
+        commentsCount,
+        reblogsCount,
+        savesCount,
+        sharesCount,
+        profileVisits: post.profileVisits || 0,
+        followsEarned: Array.isArray(post.followsEarned) ? post.followsEarned.length : 0,
+        engagementRate
+      }
+    });
+  } catch (err) {
+    console.error("getPostInsights Error:", err.message);
+    res.status(500).json({ success: false, message: "Server error fetching post insights" });
+  }
+};
+
+// 📈 GET CREATOR STUDIO ANALYTICS (/creator-hub)
+export const getCreatorStudioAnalytics = async (req, res) => {
+  try {
+    const creatorId = req.user.id;
+    const timeRange = req.query.range === "30d" ? 30 : 7; // 7d (default) or 30d
+
+    const creator = await User.findById(creatorId);
+    if (!creator) {
+      return res.status(404).json({ success: false, message: "User not found" });
+    }
+
+    const now = new Date();
+    const startDate = new Date(now.getTime() - timeRange * 24 * 60 * 60 * 1000);
+
+    // Fetch all posts authored by this creator
+    const creatorPosts = await Post.find({ userId: creatorId });
+
+    let totalViews = 0;
+    let totalUniqueViewers = 0;
+    let totalLikes = 0;
+    let totalComments = 0;
+    let totalSaves = 0;
+    let totalShares = 0;
+    let totalReblogs = 0;
+    let totalCompletions = 0;
+    let totalTipsNGN = 0;
+    let totalTipsUSDT = 0;
+    let totalTipsBTC = 0;
+
+    // Daily breakdown buckets for earnings & views graph
+    const dailyMap = {};
+    for (let i = 0; i < timeRange; i++) {
+      const d = new Date(now.getTime() - (timeRange - 1 - i) * 24 * 60 * 60 * 1000);
+      const dayKey = d.toISOString().split("T")[0]; // YYYY-MM-DD
+      const label = d.toLocaleDateString("en-US", { weekday: "short", month: "short", day: "numeric" });
+      dailyMap[dayKey] = {
+        date: dayKey,
+        label,
+        earningsNGN: 0,
+        views: 0,
+        tipsCount: 0
+      };
+    }
+
+    // Top tipping supporters accumulator
+    const supportersMap = new Map();
+
+    creatorPosts.forEach((post) => {
+      totalViews += post.views || 0;
+      totalUniqueViewers += Array.isArray(post.viewedBy) ? post.viewedBy.length : 0;
+      totalLikes += Array.isArray(post.likes) ? post.likes.length : 0;
+      totalComments += Array.isArray(post.comments) ? post.comments.length : 0;
+      totalSaves += Array.isArray(post.saves) ? post.saves.length : 0;
+      totalShares += post.shares || 0;
+      totalReblogs += Array.isArray(post.reblogs) ? post.reblogs.length : 0;
+      totalCompletions += post.completions || 0;
+
+      // Views bucket distribution (approximate across creation/update window)
+      const postDate = new Date(post.createdAt).toISOString().split("T")[0];
+      if (dailyMap[postDate]) {
+        dailyMap[postDate].views += Math.max(1, Math.round((post.views || 0) / (timeRange || 1)));
+      }
+
+      // Tips processing
+      if (Array.isArray(post.tips)) {
+        post.tips.forEach((tip) => {
+          const tipAmt = Number(tip.amount) || 0;
+          const curr = tip.currency || "NGN";
+
+          if (curr === "NGN") totalTipsNGN += tipAmt;
+          else if (curr === "USDT") totalTipsUSDT += tipAmt;
+          else if (curr === "BTC") totalTipsBTC += tipAmt;
+
+          // Check if tip date falls in selected range
+          const tipDate = tip.createdAt ? new Date(tip.createdAt) : null;
+          if (tipDate && tipDate >= startDate) {
+            const tipDayKey = tipDate.toISOString().split("T")[0];
+            if (dailyMap[tipDayKey] && curr === "NGN") {
+              dailyMap[tipDayKey].earningsNGN += tipAmt;
+              dailyMap[tipDayKey].tipsCount += 1;
+            }
+          }
+
+          // Aggregate top tipping supporters
+          const supporterKey = tip.fromUserId
+            ? tip.fromUserId.toString()
+            : (tip.fromUsername || "Anonymous");
+
+          if (!supportersMap.has(supporterKey)) {
+            supportersMap.set(supporterKey, {
+              userId: tip.fromUserId,
+              username: tip.fromUsername || "Anonymous",
+              totalNGN: 0,
+              totalUSDT: 0,
+              totalBTC: 0,
+              tipsCount: 0,
+              lastTippedAt: tip.createdAt
+            });
+          }
+
+          const s = supportersMap.get(supporterKey);
+          s.tipsCount += 1;
+          if (curr === "NGN") s.totalNGN += tipAmt;
+          else if (curr === "USDT") s.totalUSDT += tipAmt;
+          else if (curr === "BTC") s.totalBTC += tipAmt;
+
+          if (tip.createdAt && (!s.lastTippedAt || new Date(tip.createdAt) > new Date(s.lastTippedAt))) {
+            s.lastTippedAt = tip.createdAt;
+          }
+        });
+      }
+    });
+
+    // Populate supporter profile pictures
+    const topSupportersList = Array.from(supportersMap.values())
+      .sort((a, b) => b.totalNGN - a.totalNGN)
+      .slice(0, 10);
+
+    const userIdsToFetch = topSupportersList
+      .map((s) => s.userId)
+      .filter(Boolean);
+
+    if (userIdsToFetch.length > 0) {
+      const userDocs = await User.find({ _id: { $in: userIdsToFetch } })
+        .select("username profilePicture verified");
+      const userMap = new Map();
+      userDocs.forEach((u) => userMap.set(u._id.toString(), u));
+
+      topSupportersList.forEach((s) => {
+        if (s.userId && userMap.has(s.userId.toString())) {
+          const found = userMap.get(s.userId.toString());
+          s.profilePicture = found.profilePicture;
+          s.verified = found.verified;
+          s.username = found.username;
+        }
+      });
+    }
+
+    // All Creator Posts mapped with complete post-level metrics
+    const mappedCreatorPosts = [...creatorPosts]
+      .sort((a, b) => new Date(b.createdAt) - new Date(a.createdAt))
+      .map((p) => {
+        const views = p.views || 0;
+        const completions = p.completions || 0;
+        const completionRate = views > 0 ? Math.min(100, Math.round((completions / views) * 100)) : 0;
+        const imgMedia = p.media?.find((m) => m.type === "image");
+        const vidMedia = p.media?.find((m) => m.type === "video");
+        const firstMedia = imgMedia || vidMedia || p.media?.[0];
+
+        return {
+          _id: p._id,
+          title: p.title || p.body?.substring(0, 50) || "Untitled Post",
+          body: p.body || "",
+          media: p.media || [],
+          thumbnail: firstMedia?.url || null,
+          mediaType: firstMedia?.type || "text",
+          views,
+          completions,
+          completionRate,
+          totalWatchSeconds: p.totalWatchSeconds || 0,
+          likes: p.likes?.length || 0,
+          tips: p.totalTips || 0,
+          comments: p.comments?.length || 0,
+          shares: p.shares || 0,
+          saves: p.saves?.length || 0,
+          profileVisits: p.profileVisits || 0,
+          followsEarned: Array.isArray(p.followsEarned) ? p.followsEarned.length : 0,
+          createdAt: p.createdAt
+        };
+      });
+
+    // Top Performing Posts ranked by totalTips then views
+    const topPerformingPosts = [...mappedCreatorPosts]
+      .sort((a, b) => (b.tips || 0) - (a.tips || 0) || (b.views || 0) - (a.views || 0))
+      .slice(0, 6);
+
+    // Follower velocity stats
+    const followerCount = creator.followersCount || creator.followers?.length || 0;
+    const followingCount = creator.followingCount || creator.following?.length || 0;
+
+    // Overall Completion rate
+    const overallCompletionRate = totalViews > 0
+      ? Math.min(100, Math.round((totalCompletions / totalViews) * 100))
+      : 0;
+
+    res.status(200).json({
+      success: true,
+      timeRange: `${timeRange}d`,
+      overview: {
+        totalEarningsNGN: creator.totalEarned || totalTipsNGN,
+        accountBalanceNGN: creator.accountBalance || 0,
+        totalTipsNGN,
+        totalTipsUSDT,
+        totalTipsBTC,
+        totalPosts: creatorPosts.length,
+        totalViews,
+        totalUniqueViewers,
+        overallCompletionRate,
+        totalLikes,
+        totalComments,
+        totalSaves,
+        totalShares,
+        totalReblogs,
+        followerCount,
+        followingCount
+      },
+      chartData: Object.values(dailyMap),
+      topSupporters: topSupportersList,
+      topPosts: topPerformingPosts,
+      allPosts: mappedCreatorPosts
+    });
+  } catch (err) {
+    console.error("getCreatorStudioAnalytics Error:", err.message);
+    res.status(500).json({ success: false, message: "Server error generating creator analytics" });
   }
 };

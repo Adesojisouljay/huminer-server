@@ -3,6 +3,7 @@ import User from "../models/User.js";
 import Post from "../models/Post.js";
 import Transaction from "../models/Transaction.js";
 import { emitLiveTip, emitLiveEnded, emitUserBalanceUpdate } from "../helpers/socket.js";
+import { createNotification } from "../helpers/index.js";
 
 // 🟢 START LIVE STREAM (Host)
 export const startLiveStream = async (req, res) => {
@@ -29,8 +30,27 @@ export const startLiveStream = async (req, res) => {
 
     const populatedStream = await LiveStream.findById(stream._id).populate(
       "host",
-      "username profilePicture verified followersCount"
+      "username profilePicture verified followersCount followers"
     );
+
+    // 🔔 Notify all followers in background: "@Host just went live: 'Title'!"
+    if (populatedStream.host?.followers && populatedStream.host.followers.length > 0) {
+      const followersList = populatedStream.host.followers;
+      const hostUser = populatedStream.host;
+      Promise.all(
+        followersList.map((followerId) =>
+          createNotification({
+            userId: followerId._id || followerId,
+            type: "live",
+            liveId: populatedStream._id,
+            fromUserId: hostUser._id,
+            fromUsername: hostUser.username,
+            fromProfilePicture: hostUser.profilePicture,
+            message: `@${hostUser.username} is live now: "${stream.title}" 🔴`,
+          }).catch((e) => console.warn("Live follower notification failed:", e))
+        )
+      ).catch((e) => console.warn("Broadcast live alerts error:", e));
+    }
 
     return res.status(201).json({
       success: true,

@@ -460,9 +460,26 @@ export const setupSocket = (server) => {
       socket.liveRoomId = roomId;
       socket.liveUser = user;
 
+      // Keep in-memory room participants tracker
+      if (!global.liveRoomGuests) {
+        global.liveRoomGuests = new Map();
+      }
+      if (!global.liveRoomGuests.has(roomId)) {
+        global.liveRoomGuests.set(roomId, new Map());
+      }
+      const roomMap = global.liveRoomGuests.get(roomId);
+      if (user && user._id) {
+        roomMap.set(user._id.toString(), user);
+      }
+
       const clients = io.sockets.adapter.rooms.get(roomId);
       const count = clients ? clients.size : 1;
       io.to(roomId).emit("liveViewerCount", { roomId, count });
+
+      // Send the full current list of participants to everyone in the room
+      const allParticipants = Array.from(roomMap.values());
+      io.to(roomId).emit("liveParticipantsList", { roomId, participants: allParticipants });
+
       if (user) {
         socket.to(roomId).emit("liveUserJoined", { user });
       }
@@ -470,6 +487,12 @@ export const setupSocket = (server) => {
 
     socket.on("leaveLiveRoom", ({ roomId }) => {
       if (!roomId) return;
+      if (global.liveRoomGuests && global.liveRoomGuests.has(roomId) && socket.liveUser?._id) {
+        const roomMap = global.liveRoomGuests.get(roomId);
+        roomMap.delete(socket.liveUser._id.toString());
+        const allParticipants = Array.from(roomMap.values());
+        io.to(roomId).emit("liveParticipantsList", { roomId, participants: allParticipants });
+      }
       socket.leave(roomId);
       socket.liveRoomId = null;
       const clients = io.sockets.adapter.rooms.get(roomId);
@@ -491,12 +514,33 @@ export const setupSocket = (server) => {
       if (!roomId) return;
       socket.to(roomId).emit("newLiveReaction", { reaction });
     });
+
+    socket.on("liveToggleGuestMic", ({ roomId, targetUserId, canSpeak }) => {
+      if (!roomId || !targetUserId) return;
+      io.to(roomId).emit("liveGuestMicToggled", { targetUserId, canSpeak });
+    });
   
     /* --------------------------
          USER DISCONNECTS
     ---------------------------*/
     socket.on("disconnect", async () => {
       console.log("Client disconnected: " + socket.id);
+
+      // Clean up live room participants if user was in a live stream
+      if (socket.liveRoomId && global.liveRoomGuests && global.liveRoomGuests.has(socket.liveRoomId)) {
+        const roomMap = global.liveRoomGuests.get(socket.liveRoomId);
+        if (socket.liveUser?._id) {
+          roomMap.delete(socket.liveUser._id.toString());
+        }
+        const allParticipants = Array.from(roomMap.values());
+        io.to(socket.liveRoomId).emit("liveParticipantsList", {
+          roomId: socket.liveRoomId,
+          participants: allParticipants,
+        });
+        const clients = io.sockets.adapter.rooms.get(socket.liveRoomId);
+        const count = clients ? clients.size : 0;
+        io.to(socket.liveRoomId).emit("liveViewerCount", { roomId: socket.liveRoomId, count });
+      }
 
 
       // Clean up group rooms

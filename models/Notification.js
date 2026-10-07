@@ -21,7 +21,9 @@ const notificationSchema = new mongoose.Schema(
         "like",
         "login",
         "follow",
-        "unfollow"
+        "unfollow",
+        "live",
+        "mention"
       ],
       required: true 
     },
@@ -30,6 +32,12 @@ const notificationSchema = new mongoose.Schema(
     postId: { 
       type: mongoose.Schema.Types.ObjectId, 
       ref: "Post" 
+    },
+
+    // optional: when notification is tied to a live stream
+    liveId: { 
+      type: mongoose.Schema.Types.ObjectId, 
+      ref: "LiveStream" 
     },
 
     // optional: when notification is tied to a comment
