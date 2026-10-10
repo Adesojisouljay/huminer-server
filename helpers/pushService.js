@@ -132,7 +132,8 @@ export const sendPushNotification = async ({
   title,
   body,
   data = {},
-  icon = "https://huminer.adesojisouljay.com/logo512.png"
+  icon = "https://huminer.adesojisouljay.com/logo512.png",
+  channelId = "messages",
 }) => {
   try {
     const recipient = await User.findById(toUserId).select("fcmTokens username settings");
@@ -166,12 +167,14 @@ export const sendPushNotification = async ({
       android: {
         priority: "high",
         notification: {
+          channelId: channelId || "messages",
           title,
           body,
           icon: "ic_notification",
           color: "#ffd700",
           sound: "default",
           priority: "high",
+          visibility: "public",
         },
       },
       apns: {

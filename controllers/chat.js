@@ -2,6 +2,7 @@ import Chat from "../models/Chat.js";
 import User from "../models/User.js";
 import CallLog from "../models/CallLog.js";
 import { emitChatMessage, emitGroupUpdated } from "../helpers/socket.js";
+import { sendPushNotification } from "../helpers/pushService.js";
 
 // Create a new chat between users
 export const createChat = async (req, res) => {
@@ -34,7 +35,19 @@ export const getUserChats = async (req, res) => {
   try {
     const userId = req.params.userId;
 
-    const chats = await Chat.find({ participants: userId })
+    // Purge legacy "Call with " phantom group chats from DB
+    await Chat.deleteMany({
+      isGroup: true,
+      groupName: { $regex: /^Call with /i },
+    }).catch((err) => console.error("Error purging call chats:", err));
+
+    const chats = await Chat.find({
+      participants: userId,
+      $or: [
+        { isGroup: false },
+        { groupName: { $not: { $regex: /^Call with /i } } },
+      ],
+    })
       .populate("participants", "username profilePicture")
       .populate("admin", "username profilePicture")
       .populate("messages.sender", "username profilePicture")
@@ -146,6 +159,37 @@ export const sendMessage = async (req, res) => {
     const lastMessage = populated.messages[populated.messages.length - 1];
 
     emitChatMessage(chatId, lastMessage, senderId, chat.participants);
+
+    // 📱 Dispatch push notification to recipient(s) for closed-app discovery
+    try {
+      const senderUsername = lastMessage?.sender?.username || "Someone";
+      const pushTitle = chat.isGroup
+        ? `${chat.groupName || "Group"}`
+        : `@${senderUsername}`;
+      const pushBody = chat.isGroup
+        ? `@${senderUsername}: ${preview || "Sent a message"}`
+        : (preview || "Sent a message");
+
+      (chat.participants || []).forEach((p) => {
+        const pIdStr = (p._id || p).toString();
+        if (pIdStr !== senderId.toString()) {
+          sendPushNotification({
+            toUserId: pIdStr,
+            title: pushTitle,
+            body: pushBody,
+            channelId: "messages",
+            data: {
+              type: "chat_message",
+              chatId: chatId.toString(),
+              senderId: senderId.toString(),
+              senderUsername,
+            },
+          }).catch((err) => console.warn(`Chat push delivery error to ${pIdStr}:`, err?.message));
+        }
+      });
+    } catch (pushErr) {
+      console.warn("Error dispatching chat push notifications:", pushErr);
+    }
 
     res.status(201).json({ message: "Message sent", chat, newMessage: lastMessage });
   } catch (err) {
@@ -361,6 +405,10 @@ export const createGroupChat = async (req, res) => {
 
     if (!groupName) {
       return res.status(400).json({ message: "Group name is required" });
+    }
+
+    if (/^Call with /i.test(groupName.trim())) {
+      return res.status(400).json({ message: "Group name cannot start with 'Call with '" });
     }
 
     const newChat = await Chat.create({ 

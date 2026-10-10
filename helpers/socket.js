@@ -1,4 +1,5 @@
 import { Server } from "socket.io";
+import mongoose from "mongoose";
 import Chat from "../models/Chat.js";
 import User from "../models/User.js";
 import CallLog from "../models/CallLog.js";
@@ -312,16 +313,17 @@ export const setupSocket = (server) => {
     room.add(userId.toString());
     
     try {
-      const Chat = require("../models/Chat");
-      const chat = await Chat.findById(chatId);
-      if (chat && chat.participants) {
-        chat.participants.forEach(p => {
-          const pid = p.toString();
-          const pSocket = onlineUsers.get(pid);
-          if (pSocket) {
-            io.to(pSocket).emit("groupRoomStateUpdate", { chatId, count: room.size });
-          }
-        });
+      if (mongoose.Types.ObjectId.isValid(chatId)) {
+        const chat = await Chat.findById(chatId);
+        if (chat && chat.participants) {
+          chat.participants.forEach(p => {
+            const pid = p.toString();
+            const pSocket = onlineUsers.get(pid);
+            if (pSocket) {
+              io.to(pSocket).emit("groupRoomStateUpdate", { chatId, count: room.size });
+            }
+          });
+        }
       }
     } catch(e) { console.error(e) }
   });
@@ -337,16 +339,17 @@ export const setupSocket = (server) => {
       }
       
       try {
-        const Chat = require("../models/Chat");
-        const chat = await Chat.findById(chatId);
-        if (chat && chat.participants) {
-          chat.participants.forEach(p => {
-            const pid = p.toString();
-            const pSocket = onlineUsers.get(pid);
-            if (pSocket) {
-              io.to(pSocket).emit("groupRoomStateUpdate", { chatId, count });
-            }
-          });
+        if (mongoose.Types.ObjectId.isValid(chatId)) {
+          const chat = await Chat.findById(chatId);
+          if (chat && chat.participants) {
+            chat.participants.forEach(p => {
+              const pid = p.toString();
+              const pSocket = onlineUsers.get(pid);
+              if (pSocket) {
+                io.to(pSocket).emit("groupRoomStateUpdate", { chatId, count });
+              }
+            });
+          }
         }
       } catch(e) { console.error(e) }
     }
@@ -652,7 +655,9 @@ export const recordCallToChat = async ({
   try {
     let chat;
     if (isGroup && chatId) {
-      chat = await Chat.findById(chatId);
+      if (mongoose.Types.ObjectId.isValid(chatId)) {
+        chat = await Chat.findById(chatId);
+      }
     } else if (callerId && calleeId) {
       chat = await Chat.findOne({
         participants: { $all: [callerId, calleeId], $size: 2 },
