@@ -64,24 +64,34 @@ export const sendIncomingCallPush = async ({
 
     const message = {
       tokens: recipient.fcmTokens,
+      notification: {
+        title,
+        body,
+      },
       data: {
         type: "incoming_call",
-        fromUserId: fromUserId?.toString(),
+        fromUserId: fromUserId?.toString() || "",
         fromUsername: fromUsername || "User",
         fromProfilePicture: fromProfilePicture || "",
         callType: callType || "audio",
+        title,
+        body,
         click_action: "OPEN_CALL",
       },
       android: {
         priority: "high",
         ttl: 60 * 1000, // 60 seconds TTL for incoming call
         notification: {
-          channelId: "calls",
+          channelId: "calls_v2",
           title,
           body,
+          color: "#ffd700",
           sound: "default",
           priority: "max",
           visibility: "public",
+          defaultSound: true,
+          defaultVibrateTimings: true,
+          ticker: title,
         },
       },
       apns: {
@@ -133,7 +143,7 @@ export const sendPushNotification = async ({
   body,
   data = {},
   icon = "https://huminer.adesojisouljay.com/logo512.png",
-  channelId = "messages",
+  channelId = "messages_v2",
 }) => {
   try {
     const recipient = await User.findById(toUserId).select("fcmTokens username settings");
@@ -167,14 +177,16 @@ export const sendPushNotification = async ({
       android: {
         priority: "high",
         notification: {
-          channelId: channelId || "messages",
+          channelId: channelId || "messages_v2",
           title,
           body,
-          icon: "ic_notification",
           color: "#ffd700",
           sound: "default",
           priority: "high",
           visibility: "public",
+          defaultSound: true,
+          defaultVibrateTimings: true,
+          ticker: title,
         },
       },
       apns: {

@@ -158,38 +158,10 @@ export const sendMessage = async (req, res) => {
     });
     const lastMessage = populated.messages[populated.messages.length - 1];
 
-    emitChatMessage(chatId, lastMessage, senderId, chat.participants);
-
-    // 📱 Dispatch push notification to recipient(s) for closed-app discovery
-    try {
-      const senderUsername = lastMessage?.sender?.username || "Someone";
-      const pushTitle = chat.isGroup
-        ? `${chat.groupName || "Group"}`
-        : `@${senderUsername}`;
-      const pushBody = chat.isGroup
-        ? `@${senderUsername}: ${preview || "Sent a message"}`
-        : (preview || "Sent a message");
-
-      (chat.participants || []).forEach((p) => {
-        const pIdStr = (p._id || p).toString();
-        if (pIdStr !== senderId.toString()) {
-          sendPushNotification({
-            toUserId: pIdStr,
-            title: pushTitle,
-            body: pushBody,
-            channelId: "messages",
-            data: {
-              type: "chat_message",
-              chatId: chatId.toString(),
-              senderId: senderId.toString(),
-              senderUsername,
-            },
-          }).catch((err) => console.warn(`Chat push delivery error to ${pIdStr}:`, err?.message));
-        }
-      });
-    } catch (pushErr) {
-      console.warn("Error dispatching chat push notifications:", pushErr);
-    }
+    emitChatMessage(chatId, lastMessage, senderId, chat.participants, {
+      isGroup: chat.isGroup,
+      groupName: chat.groupName,
+    });
 
     res.status(201).json({ message: "Message sent", chat, newMessage: lastMessage });
   } catch (err) {

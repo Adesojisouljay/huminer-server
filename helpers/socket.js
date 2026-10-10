@@ -3,7 +3,7 @@ import mongoose from "mongoose";
 import Chat from "../models/Chat.js";
 import User from "../models/User.js";
 import CallLog from "../models/CallLog.js";
-import { sendIncomingCallPush } from "./pushService.js";
+import { sendIncomingCallPush, sendPushNotification } from "./pushService.js";
 
 let io;
 const onlineUsers = new Map(); 
@@ -34,6 +34,14 @@ export const setupSocket = (server) => {
       socket.userId = uid;
       socket.join(`user:${uid}`);
       console.log(`User Online: ${uid} (socket: ${socket.id})`);
+
+      // 📞 Check if there is an active pending call waiting for this reconnected user
+      for (const [key, call] of activeCalls.entries()) {
+        if (call.calleeId === uid && !call.answered && (Date.now() - call.startTime < 45000)) {
+          console.log(`📞 [Pending Call] Dispatched pending call to reconnected user ${uid}`);
+          socket.emit("incomingCall", call.payload);
+        }
+      }
 
       // broadcast updated list
       io.emit("onlineUsers", Array.from(onlineUsers.keys()));
@@ -121,19 +129,10 @@ export const setupSocket = (server) => {
         const lastMessage =
           populatedMessage.messages[populatedMessage.messages.length - 1];
 
-        // Emit inside the chat room
-        io.to(chatId).emit("newMessage", { chatId, message: lastMessage });
-
-        // Also notify all other participants in their personal rooms so unread counts update in real-time
-        (chat.participants || []).forEach((pId) => {
-          const participantId = pId.toString();
-          if (participantId !== senderId.toString()) {
-            io.to(`user:${participantId}`).emit("chatMessageReceived", {
-              chatId,
-              message: lastMessage,
-              senderId: senderId.toString(),
-            });
-          }
+        // Emit to chat room and notify participants via unified emitChatMessage (which also sends push notifications)
+        emitChatMessage(chatId, lastMessage, senderId, chat.participants, {
+          isGroup: chat.isGroup,
+          groupName: chat.groupName,
         });
 
       } catch (err) {
@@ -211,15 +210,6 @@ export const setupSocket = (server) => {
     }
 
     const callKey = [fromUid, targetUid].sort().join(":");
-    activeCalls.set(callKey, {
-      logId: logEntry?._id,
-      callerId: fromUid,
-      calleeId: targetUid,
-      callType: callType || "audio",
-      startTime: Date.now(),
-      connectedTime: null,
-      answered: false,
-    });
 
     const payload = {
       callId: logEntry?._id,
@@ -229,6 +219,17 @@ export const setupSocket = (server) => {
       fromUsername: fromUsername || "User",
       fromProfilePicture: fromProfilePicture || null,
     };
+
+    activeCalls.set(callKey, {
+      logId: logEntry?._id,
+      callerId: fromUid,
+      calleeId: targetUid,
+      callType: callType || "audio",
+      startTime: Date.now(),
+      connectedTime: null,
+      answered: false,
+      payload,
+    });
 
     // Emit to personal user room
     io.to(`user:${targetUid}`).emit("incomingCall", payload);
@@ -391,6 +392,23 @@ export const setupSocket = (server) => {
             timestamp: Date.now()
           });
         }
+
+        // 📱 Dispatch push notification for closed-app ringing
+        sendPushNotification({
+          toUserId: pid.toString(),
+          title: `📞 Group ${callType === "video" ? "Video" : "Voice"} Call`,
+          body: `${caller?.username || "Someone"} started a call in ${groupName || "group"}`,
+          channelId: "calls_v2",
+          data: {
+            type: "incoming_call",
+            chatId: chatId?.toString(),
+            fromUserId: (caller?._id || caller)?.toString(),
+            fromUsername: caller?.username || "Group Call",
+            fromProfilePicture: caller?.profilePicture || "",
+            callType: callType || "audio",
+            isGroup: "true",
+          },
+        }).catch((err) => console.warn(`Group call push error:`, err?.message));
       }
     });
   });
@@ -714,11 +732,11 @@ export const recordCallToChat = async ({
   }
 };
 
-export const emitChatMessage = (chatId, lastMessage, senderId, participants) => {
+export const emitChatMessage = (chatId, lastMessage, senderId, participants, chatMeta = {}) => {
   if (io) {
     io.to(chatId).emit("newMessage", { chatId, message: lastMessage });
     (participants || []).forEach((pId) => {
-      const participantId = pId.toString();
+      const participantId = (pId._id || pId).toString();
       if (participantId !== senderId.toString()) {
         io.to(`user:${participantId}`).emit("chatMessageReceived", {
           chatId,
@@ -727,6 +745,45 @@ export const emitChatMessage = (chatId, lastMessage, senderId, participants) => 
         });
       }
     });
+  }
+
+  // 📱 Send Push Notification to all offline/background participants
+  try {
+    const senderUsername = lastMessage?.sender?.username || "Someone";
+    const preview =
+      lastMessage?.text ||
+      (lastMessage?.audioUrl
+        ? "🎤 Voice message"
+        : lastMessage?.fileUrl
+        ? "📷 Media"
+        : "New message");
+
+    const pushTitle = chatMeta.isGroup
+      ? `${chatMeta.groupName || "Group"}`
+      : `@${senderUsername}`;
+    const pushBody = chatMeta.isGroup
+      ? `@${senderUsername}: ${preview}`
+      : preview;
+
+    (participants || []).forEach((p) => {
+      const pIdStr = (p._id || p).toString();
+      if (pIdStr !== senderId.toString()) {
+        sendPushNotification({
+          toUserId: pIdStr,
+          title: pushTitle,
+          body: pushBody,
+          channelId: "messages_v2",
+          data: {
+            type: "chat_message",
+            chatId: chatId.toString(),
+            senderId: senderId.toString(),
+            senderUsername,
+          },
+        }).catch((err) => console.warn(`Chat push error to ${pIdStr}:`, err?.message));
+      }
+    });
+  } catch (pushErr) {
+    console.warn("Error dispatching chat push notifications:", pushErr);
   }
 };
 
